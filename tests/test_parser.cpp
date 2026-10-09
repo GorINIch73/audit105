@@ -141,6 +141,11 @@ static void TestFile(const std::string& path, const Expectations& exp) {
     Check(std::fabs(storedClosing - report.closingTotal) < 1.0, "items round-trip closing total");
     Check(db.ListSubaccounts(runId).size() == report.subaccounts.size(), "subaccounts round-trip count");
 
+    std::vector<Flag> flags = db.ListRunFlags(runId);
+    Check(!flags.empty(), "structural flags created on import");
+    Run storedRun;
+    Check(db.GetRun(runId, storedRun) && storedRun.flagged > 0, "run flagged count updated");
+
     Check(db.IntegrityReport().find(u8"Нарушений FK: 0") != std::string::npos, "no FK violations after import");
     std::cout << db.IntegrityReport() << "\n";
 }

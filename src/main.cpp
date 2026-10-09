@@ -80,12 +80,18 @@ int main(int argc, char** argv) {
 
     App app;
     app.SetWindow(window);
-    app.SetDbPath(ParseArg(argc, argv, "--db").empty() ? DefaultDbPath() : ParseArg(argc, argv, "--db"));
+    app.LoadSession();
+
+    const std::string dbArg = ParseArg(argc, argv, "--db");
+    const std::string dbPath = dbArg.empty() ? app.LastDb() : dbArg;
+
+    app.SetDbPath(dbPath);
     app.refsPath = ParseArg(argc, argv, "--refs").empty() ? "refs" : ParseArg(argc, argv, "--refs");
 
     app.ApplyTheme(0);
     app.ApplyFont(22);
-    app.OpenDatabase(app.DbPath());
+    app.OpenDatabase(dbPath);
+    app.UpdateWindowTitle();
 
     AboutInfo about;
     about.dbPath = app.DbPath();

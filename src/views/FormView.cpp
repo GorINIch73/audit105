@@ -7,6 +7,7 @@
 
 #include <algorithm>
 #include <string>
+#include <unordered_map>
 
 namespace {
 
@@ -52,10 +53,12 @@ void FormView::RefreshData() {
 void FormView::Render() {
     if (!app) return;
 
-    if (ImGui::Begin(GetTitle(), nullptr)) {
+    if (BeginWindow()) {
+        RenderCloseBar();
+
         if (!app->HasDatabase()) {
             ImGui::TextDisabled("База не открыта. Откройте или создайте её (Файл → Создать/Открыть).");
-            ImGui::End();
+            EndWindow();
             return;
         }
 
@@ -63,7 +66,7 @@ void FormView::Render() {
 
         if (runs.empty()) {
             ImGui::TextDisabled("Нет прогонов. Импортируйте оборот (Импорт → Импорт оборота).");
-            ImGui::End();
+            EndWindow();
             return;
         }
 
@@ -89,9 +92,22 @@ void FormView::Render() {
         ImGui::SameLine();
         InputTextSync("Субсчёт", subFilter);
         ImGui::SameLine();
-                ImGui::Combo(ICON_FA_FILTER "  Фильтр", &turnoverMode, TurnoverModes, 6);
+        ImGui::Combo(ICON_FA_FILTER "  Фильтр", &turnoverMode, TurnoverModes, 6);
         ImGui::SameLine();
         AmountInput("Мин. остаток", minSum);
+        ImGui::SameLine();
+        ImGui::Checkbox("Только отмеченные", &onlyFlagged);
+
+        flagSummary.clear();
+        std::unordered_map<std::string, int> counts;
+        for (const ItemRecord& rec : items) {
+            if (!rec.ruleCode.empty()) ++counts[rec.ruleCode];
+        }
+        flagSummary.assign(counts.begin(), counts.end());
+        std::sort(flagSummary.begin(), flagSummary.end(),
+                  [](const std::pair<std::string, int>& a, const std::pair<std::string, int>& b) {
+                      return a.first < b.first;
+                  });
 
         ImGui::Separator();
 
@@ -118,6 +134,7 @@ void FormView::Render() {
             for (const ItemRecord& rec : items) {
                 const Item& item = rec.item;
                 if (!MatchesTurnover(item, turnoverMode)) continue;
+                if (onlyFlagged && rec.ruleCode.empty()) continue;
                 if (minSum > 0.0 && item.closeDebit - item.closeCredit < minSum) continue;
                 if (!subFilter.empty() && !ContainsUtf8(rec.subaccount, subFilter)) continue;
                 if (!search.empty() && !ContainsUtf8(item.nameNorm, ToLowerUtf8(search))) continue;
@@ -166,9 +183,31 @@ void FormView::Render() {
         ImGui::Separator();
         ImGui::Text("Показано: %d из %d | сумма остатков: %s", shown, static_cast<int>(items.size()),
                     FormatAmount(shownSum).c_str());
+        if (!flagSummary.empty()) {
+            std::string summary;
+            for (const auto& entry : flagSummary) {
+                if (!summary.empty()) summary += ", ";
+                summary += entry.first + " (" + std::to_string(entry.second) + ")";
+            }
+            ImGui::Text("Отметки: %s", summary.c_str());
+        }
         ImGui::TextDisabled(
             "Легенда: красный — арифметика не сходится; жёлтый — без оборота; синий — отмечено правилом.");
 
-        ImGui::End();
+        if (ImGui::Button(ICON_FA_TRASH "  Удалить прогон")) {
+            if (ConfirmationModal("delete_run", "Удалить прогон",
+                                  "Удалить прогон #" + std::to_string(runs[runIndex].id) +
+                                  " и все его позиции?")) {
+                int removedItems = 0;
+                double removedSum = 0.0;
+                if (app->Db().DeleteRun(runs[runIndex].id, removedItems, removedSum)) {
+                    app->SetStatus("Удалён прогон: " + std::to_string(removedItems) + " позиций");
+                    runIndex = -1;
+                    RefreshData();
+                }
+            }
+        }
+
+        EndWindow();
     }
 }

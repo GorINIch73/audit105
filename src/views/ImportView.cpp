@@ -58,10 +58,12 @@ void ImportView::RefreshData() {
 void ImportView::Render() {
     if (!app) return;
 
-    if (ImGui::Begin(GetTitle(), nullptr)) {
+    if (BeginWindow()) {
+        RenderCloseBar();
+
         if (!app->HasDatabase()) {
             ImGui::TextDisabled("Сначала создайте или откройте базу (Файл → Создать/Открыть).");
-            ImGui::End();
+            EndWindow();
             return;
         }
 
@@ -87,7 +89,7 @@ void ImportView::Render() {
 
         if (path.empty()) {
             ImGui::TextDisabled("Файл не выбран. Поддерживаются .ods, .xlsx, .xls (через LibreOffice), .xml.");
-            ImGui::End();
+            EndWindow();
             return;
         }
 
@@ -128,7 +130,7 @@ void ImportView::Render() {
 
         if (!parsed) {
             ImGui::TextColored(ImVec4(1.0f, 0.4f, 0.4f, 1.0f), "%s", lastError.c_str());
-            ImGui::End();
+            EndWindow();
             return;
         }
 
@@ -169,6 +171,13 @@ void ImportView::Render() {
         }
 
         ImGui::Separator();
+        std::string fileName = std::filesystem::path(path).filename().string();
+        int existing = app->Db().CountRunsByFile(fileName);
+        if (existing > 0) {
+            ImGui::TextDisabled("В реестре уже %d прогонов этого файла — импорт создаст новую запись.", existing);
+        }
+
+        ImGui::Separator();
         InputTextSync("Организация", organization);
         InputTextSync("Период", period);
         InputTextSync("Примечание", note);
@@ -178,7 +187,7 @@ void ImportView::Render() {
         ImGui::Separator();
         if (ImGui::Button(ICON_FA_UPLOAD "  Импортировать в базу")) {
             Run run;
-            run.file = std::filesystem::path(path).filename().string();
+            run.file = fileName;
             run.format = formatName;
             run.organization = organization;
             run.period = period;
@@ -195,6 +204,6 @@ void ImportView::Render() {
             }
         }
 
-        ImGui::End();
+        EndWindow();
     }
 }

@@ -1,6 +1,7 @@
 #pragma once
 
 #include "domain/PositionParser.h"
+#include "domain/RulesEngine.h"
 
 #include <sqlite3.h>
 #include <cstdint>
@@ -40,6 +41,23 @@ struct ItemRecord {
     int severity = 0;
 };
 
+struct Flag {
+    int64_t id = 0;
+    int64_t itemId = 0;
+    std::string ruleCode;
+    std::string category;
+    int severity = 0;
+    double amount = 0.0;
+    std::string rationale;
+};
+
+struct SummaryRow {
+    std::string ruleCode;
+    std::string category;
+    int count = 0;
+    double amount = 0.0;
+};
+
 class Database {
 public:
     Database() = default;
@@ -52,6 +70,7 @@ public:
 
     bool EnsureSchema();
     bool SeedDefaults();
+    bool SeedDefaultRules();
 
     bool Backup(const std::string& reason, std::string& outPath);
     bool SaveAs(const std::string& target);
@@ -70,6 +89,7 @@ public:
                               bool recentOnly,
                               int limit = 200);
     bool GetRun(int64_t id, Run& out);
+    int CountRunsByFile(const std::string& file);
     bool DeleteRun(int64_t id, int& removedItems, double& removedSum);
     bool UpdateRunStats(int64_t id, int items, int flagged, int noted);
 
@@ -78,11 +98,27 @@ public:
 
     std::vector<ItemRecord> ListRunItems(int64_t runId);
     std::vector<Subaccount> ListSubaccounts(int64_t runId);
+    std::vector<Flag> ListRunFlags(int64_t runId);
+    bool InsertFlag(int64_t itemId, const std::string& ruleCode, const std::string& category,
+                    int severity, double amount, const std::string& rationale);
 
     std::vector<Category> ListCategories();
     bool AddCategory(const Category& cat);
     bool UpdateCategory(const Category& cat);
     bool DeleteCategory(int64_t id);
+
+    std::vector<Rule> ListRules();
+    bool AddRule(const Rule& rule);
+    bool UpdateRule(const Rule& rule);
+    bool DeleteRule(int64_t id);
+
+    std::vector<Term> ListTerms();
+    bool AddTerm(const Term& term);
+    bool DeleteTerm(int64_t id);
+
+    int ApplyRules(int64_t runId);
+    int ApplyRulesInternal(int64_t runId);
+    std::vector<SummaryRow> RunSummary(int64_t runId);
 
     int64_t LastInsertId() const;
 

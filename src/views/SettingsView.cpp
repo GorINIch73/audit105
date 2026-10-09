@@ -11,7 +11,9 @@ void SettingsView::RefreshData() {
 void SettingsView::Render() {
     if (!app) return;
 
-    if (ImGui::Begin(GetTitle(), nullptr)) {
+    if (BeginWindow()) {
+        RenderCloseBar();
+
         ImGui::Text(ICON_FA_DATABASE "  База: %s",
                     app->DbPath().empty() ? "не выбрана" : app->DbPath().c_str());
         ImGui::Separator();
@@ -30,9 +32,19 @@ void SettingsView::Render() {
         ImGui::TextWrapped("%s", integrity.empty() ? "База не открыта." : integrity.c_str());
 
         ImGui::Separator();
+        ImGui::Text(ICON_FA_CLOCK_ROTATE_LEFT "  История баз");
+        if (app->recentDbPaths.empty()) {
+            ImGui::TextDisabled("История пуста.");
+        } else {
+            for (const auto& path : app->recentDbPaths) {
+                if (ImGui::Button(path.c_str())) app->OpenDatabase(path);
+            }
+        }
+
+        ImGui::Separator();
         ImGui::Text("Справочники: %s", app->refsPath.c_str());
         ImGui::TextDisabled("Пакет справочников (refs_bundle.zip) — этап 9");
 
-        ImGui::End();
+        EndWindow();
     }
 }

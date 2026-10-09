@@ -42,9 +42,17 @@ public:
     Database& Db() { return db; }
     bool HasDatabase() const { return db.IsOpen(); }
 
+    void LoadSession();
+    void SaveSession();
+    std::string LastDb() const;
+    void UpdateWindowTitle();
+
     bool SaveAllViews();
     void RefreshAllViews();
     void CloseAllViews();
+    void CloseView(BaseView* view);
+    void CloseFocusedView();
+    size_t OpenViewCount() const { return views.size(); }
 
     void ApplyTheme(int index);
     void ApplyFont(int size);
@@ -59,6 +67,7 @@ public:
 
     std::vector<std::unique_ptr<BaseView>> views;
     std::vector<std::string> recentDbPaths;
+    std::string lastDbPath;
     std::string refsPath = "refs";
 
     bool showAbout = false;
@@ -70,6 +79,7 @@ private:
 
     GLFWwindow* window = nullptr;
     ImGuiID mainDockId = 0;
+    BaseView* focusedView = nullptr;
     Database db;
     int themeIndex = 0;
     int fontSize = 22;

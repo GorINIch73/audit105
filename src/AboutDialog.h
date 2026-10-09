@@ -18,7 +18,10 @@ inline void RenderAboutDialog(const AboutInfo& info, bool* show) {
                              ImGuiWindowFlags_NoMove |
                              ImGuiWindowFlags_AlwaysAutoResize;
 
-    ImGui::Begin("О программе", nullptr, flags);
+    if (!ImGui::Begin("О программе", show, flags)) {
+        ImGui::End();
+        return;
+    }
     ImGui::TextUnformatted(ICON_FA_STETHOSCOPE " Аудит счёта 105 (МЗ, ОМС)");
     ImGui::Separator();
     ImGui::Text("Версия: %s", info.version.c_str());

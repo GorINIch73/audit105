@@ -1,12 +1,17 @@
 #include "Database.h"
 
 #include "PlatformUtils.h"
+#include "domain/Utf8.h"
 
 #include <chrono>
+#include <cmath>
 #include <cstdio>
 #include <ctime>
 #include <filesystem>
+#include <iomanip>
 #include <iostream>
+#include <sstream>
+#include <unordered_map>
 
 namespace {
 
@@ -46,6 +51,7 @@ CREATE TABLE IF NOT EXISTS runs(
   imported_at TEXT NOT NULL,
   items INTEGER DEFAULT 0, flagged INTEGER DEFAULT 0, noted INTEGER DEFAULT 0);
 CREATE INDEX IF NOT EXISTS idx_runs_imported ON runs(imported_at DESC);
+CREATE INDEX IF NOT EXISTS idx_runs_file_period ON runs(file, period);
 
 CREATE TABLE IF NOT EXISTS subaccounts(
   id INTEGER PRIMARY KEY, run_id INTEGER NOT NULL REFERENCES runs(id) ON DELETE CASCADE,
@@ -60,10 +66,12 @@ CREATE TABLE IF NOT EXISTS items(
   open_debit REAL, open_credit REAL, in_debit REAL, out_credit REAL,
   close_debit REAL, close_credit REAL,
   qty_open REAL, qty_in REAL, qty_out REAL, qty_close REAL,
-  unit_price REAL, arith_ok INTEGER DEFAULT 1,
+  unit_price REAL, arith_ok INTEGER DEFAULT 1, has_qty INTEGER DEFAULT 1,
+  qty_mismatch INTEGER DEFAULT 0,
   rule_code TEXT, category TEXT, severity INTEGER DEFAULT 0);
 CREATE INDEX IF NOT EXISTS idx_items_run ON items(run_id);
 CREATE INDEX IF NOT EXISTS idx_items_sub ON items(subaccount_id);
+CREATE INDEX IF NOT EXISTS idx_items_flag ON items(rule_code);
 
 CREATE TABLE IF NOT EXISTS flags(
   id INTEGER PRIMARY KEY, item_id INTEGER NOT NULL REFERENCES items(id) ON DELETE CASCADE,
@@ -148,6 +156,45 @@ bool Database::EnsureSchema() {
         sqlite3_free(err);
         return false;
     }
+
+    bool hasHasQty = false;
+    sqlite3_stmt* st = nullptr;
+    if (sqlite3_prepare_v2(db, "PRAGMA table_info(items)", -1, &st, nullptr) == SQLITE_OK) {
+        while (sqlite3_step(st) == SQLITE_ROW) {
+            if (ColumnText(st, 1) == "has_qty") {
+                hasHasQty = true;
+                break;
+            }
+        }
+        sqlite3_finalize(st);
+    }
+    if (!hasHasQty) {
+        if (sqlite3_exec(db, "ALTER TABLE items ADD COLUMN has_qty INTEGER DEFAULT 1",
+                         nullptr, nullptr, &err) != SQLITE_OK) {
+            std::cerr << "Migration error: " << (err ? err : "unknown") << std::endl;
+            sqlite3_free(err);
+            return false;
+        }
+    }
+
+    bool hasQtyMismatch = false;
+    if (sqlite3_prepare_v2(db, "PRAGMA table_info(items)", -1, &st, nullptr) == SQLITE_OK) {
+        while (sqlite3_step(st) == SQLITE_ROW) {
+            if (ColumnText(st, 1) == "qty_mismatch") {
+                hasQtyMismatch = true;
+                break;
+            }
+        }
+        sqlite3_finalize(st);
+    }
+    if (!hasQtyMismatch) {
+        if (sqlite3_exec(db, "ALTER TABLE items ADD COLUMN qty_mismatch INTEGER DEFAULT 0",
+                         nullptr, nullptr, &err) != SQLITE_OK) {
+            std::cerr << "Migration error: " << (err ? err : "unknown") << std::endl;
+            sqlite3_free(err);
+            return false;
+        }
+    }
     return true;
 }
 
@@ -174,6 +221,53 @@ bool Database::SeedDefaults() {
         sqlite3_bind_text(st, 2, s.color, -1, SQLITE_STATIC);
         sqlite3_bind_text(st, 3, s.desc, -1, SQLITE_STATIC);
         sqlite3_bind_int(st, 4, s.order);
+        sqlite3_step(st);
+        sqlite3_reset(st);
+    }
+    sqlite3_finalize(st);
+
+    if (SeedDefaultRules()) return true;
+    return true;
+}
+
+bool Database::SeedDefaultRules() {
+    sqlite3_stmt* st = nullptr;
+    if (sqlite3_prepare_v2(db, "SELECT COUNT(*) FROM rules", -1, &st, nullptr) != SQLITE_OK)
+        return false;
+    int count = 0;
+    if (sqlite3_step(st) == SQLITE_ROW) count = sqlite3_column_int(st, 0);
+    sqlite3_finalize(st);
+    if (count > 0) return true;
+
+    struct SeedRule {
+        const char* code;
+        const char* category;
+        const char* type;
+        const char* pattern;
+        int severity;
+        const char* rationale;
+    };
+    const SeedRule seeds[] = {
+        {"S01", "Обратить внимание", "structural", "arith", 3, "Сальдо не сходится: начало + оборот != конец"},
+        {"S02", "Обратить внимание", "structural", "qty_missing", 2, "Нет строки «Кол.» — количество неизвестно"},
+        {"S03", "Обратить внимание", "structural", "qty_mismatch", 1, "Слоты «Сумма» и «Кол.» заполнены неравномерно"},
+        {"S04", "Обратить внимание", "structural", "negative", 3, "Отрицательный остаток на конец периода"},
+        {"S05", "Обратить внимание", "structural", "no_turnover", 1, "Позиция без оборота за период"},
+        {"S06", "Обратить внимание", "structural", "zero_qty", 2, "Сумма есть, количество нулевое"},
+        {"S07", "Обратить внимание", "exact", "signature", 3, "Точный дубликат позиции (совпадают все суммы)"},
+        {"S08", "Обратить внимание", "exact", "name", 2, "Дубликат наименования на том же субсчёте"},
+    };
+    sqlite3_prepare_v2(db,
+        "INSERT INTO rules(code, category, type, pattern, severity, rationale, active, updated_at) "
+        "VALUES(?,?,?,?,?,?,1,?)", -1, &st, nullptr);
+    for (const auto& s : seeds) {
+        sqlite3_bind_text(st, 1, s.code, -1, SQLITE_STATIC);
+        sqlite3_bind_text(st, 2, s.category, -1, SQLITE_STATIC);
+        sqlite3_bind_text(st, 3, s.type, -1, SQLITE_STATIC);
+        sqlite3_bind_text(st, 4, s.pattern, -1, SQLITE_STATIC);
+        sqlite3_bind_int(st, 5, s.severity);
+        sqlite3_bind_text(st, 6, s.rationale, -1, SQLITE_STATIC);
+        sqlite3_bind_text(st, 7, NowCompact().c_str(), -1, SQLITE_STATIC);
         sqlite3_step(st);
         sqlite3_reset(st);
     }
@@ -244,11 +338,53 @@ std::string Database::IntegrityReport() {
     report += "Правил: " + std::to_string(count("rules")) + "\n";
     report += "Терминов: " + std::to_string(count("terms")) + "\n";
 
+    auto scalar = [&](const std::string& query) -> long long {
+        if (sqlite3_prepare_v2(db, query.c_str(), -1, &st, nullptr) != SQLITE_OK) return 0;
+        long long value = 0;
+        if (sqlite3_step(st) == SQLITE_ROW) value = sqlite3_column_int64(st, 0);
+        sqlite3_finalize(st);
+        return value;
+    };
+
+    report += "Позиций без «Кол.»: " + std::to_string(scalar("SELECT COUNT(*) FROM items WHERE has_qty=0")) + "\n";
+    report += "Позиций с арифметическим сбоем: " + std::to_string(scalar("SELECT COUNT(*) FROM items WHERE arith_ok=0")) + "\n";
+    report += "Позиций с отрицательным остатком: " +
+              std::to_string(scalar("SELECT COUNT(*) FROM items WHERE close_debit - close_credit < 0")) + "\n";
+    report += "Позиций без субсчёта: " +
+              std::to_string(scalar("SELECT COUNT(*) FROM items i JOIN subaccounts s ON s.id=i.subaccount_id "
+                                    "WHERE s.code='' OR s.code IS NULL")) + "\n";
+
+    int mismatches = 0;
+    if (sqlite3_prepare_v2(db,
+            "SELECT s.code, s.opening, s.debit, s.credit, s.closing, "
+            "COALESCE(SUM(i.open_debit - i.open_credit),0), COALESCE(SUM(i.in_debit),0), "
+            "COALESCE(SUM(i.out_credit),0), COALESCE(SUM(i.close_debit - i.close_credit),0) "
+            "FROM subaccounts s LEFT JOIN items i ON i.subaccount_id = s.id "
+            "GROUP BY s.id", -1, &st, nullptr) == SQLITE_OK) {
+        while (sqlite3_step(st) == SQLITE_ROW) {
+            double opening = sqlite3_column_double(st, 1);
+            double debit = sqlite3_column_double(st, 2);
+            double credit = sqlite3_column_double(st, 3);
+            double closing = sqlite3_column_double(st, 4);
+            double sumOpening = sqlite3_column_double(st, 5);
+            double sumDebit = sqlite3_column_double(st, 6);
+            double sumCredit = sqlite3_column_double(st, 7);
+            double sumClosing = sqlite3_column_double(st, 8);
+            if (std::fabs(opening - sumOpening) > 0.01 ||
+                std::fabs(debit - sumDebit) > 0.01 ||
+                std::fabs(credit - sumCredit) > 0.01 ||
+                std::fabs(closing - sumClosing) > 0.01) {
+                ++mismatches;
+            }
+        }
+        sqlite3_finalize(st);
+    }
     int fkIssues = 0;
     if (sqlite3_prepare_v2(db, "PRAGMA foreign_key_check", -1, &st, nullptr) == SQLITE_OK) {
         while (sqlite3_step(st) == SQLITE_ROW) ++fkIssues;
         sqlite3_finalize(st);
     }
+    report += "Субсчётов, где подитог != сумма позиций: " + std::to_string(mismatches) + "\n";
     report += "Нарушений FK: " + std::to_string(fkIssues);
     (void)err;
     return report;
@@ -299,8 +435,8 @@ int64_t Database::InsertItem(int64_t runId, int64_t subaccountId, const Item& it
     if (sqlite3_prepare_v2(db,
             "INSERT INTO items(run_id, subaccount_id, row_no, name_raw, name_norm, "
             "open_debit, open_credit, in_debit, out_credit, close_debit, close_credit, "
-            "qty_open, qty_in, qty_out, qty_close, unit_price, arith_ok) "
-            "VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)", -1, &st, nullptr) != SQLITE_OK) {
+            "qty_open, qty_in, qty_out, qty_close, unit_price, arith_ok, has_qty, qty_mismatch) "
+            "VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)", -1, &st, nullptr) != SQLITE_OK) {
         return 0;
     }
     sqlite3_bind_int64(st, 1, runId);
@@ -320,6 +456,8 @@ int64_t Database::InsertItem(int64_t runId, int64_t subaccountId, const Item& it
     sqlite3_bind_double(st, 15, item.qtyClose);
     sqlite3_bind_double(st, 16, item.unitPrice);
     sqlite3_bind_int(st, 17, item.arithOk ? 1 : 0);
+    sqlite3_bind_int(st, 18, item.hasQtyRow ? 1 : 0);
+    sqlite3_bind_int(st, 19, item.qtyMismatch ? 1 : 0);
     sqlite3_step(st);
     sqlite3_finalize(st);
     return sqlite3_last_insert_rowid(db);
@@ -355,7 +493,7 @@ std::vector<ItemRecord> Database::ListRunItems(int64_t runId) {
             "SELECT i.id, i.row_no, i.name_raw, i.name_norm, s.code, "
             "i.open_debit, i.open_credit, i.in_debit, i.out_credit, i.close_debit, i.close_credit, "
             "i.qty_open, i.qty_in, i.qty_out, i.qty_close, i.unit_price, i.arith_ok, "
-            "i.rule_code, i.category, i.severity "
+            "i.rule_code, i.category, i.severity, i.has_qty, i.qty_mismatch "
             "FROM items i JOIN subaccounts s ON s.id = i.subaccount_id "
             "WHERE i.run_id = ? ORDER BY i.row_no", -1, &st, nullptr) != SQLITE_OK) {
         return out;
@@ -383,30 +521,100 @@ std::vector<ItemRecord> Database::ListRunItems(int64_t runId) {
         rec.ruleCode = ColumnText(st, 17);
         rec.category = ColumnText(st, 18);
         rec.severity = sqlite3_column_int(st, 19);
+        rec.item.subaccount = ColumnText(st, 4);
+        rec.item.hasQtyRow = sqlite3_column_int(st, 20) != 0;
+        rec.item.qtyMismatch = sqlite3_column_int(st, 21) != 0;
         out.push_back(std::move(rec));
     }
     sqlite3_finalize(st);
     return out;
 }
 
+bool Database::InsertFlag(int64_t itemId, const std::string& ruleCode, const std::string& category,
+                          int severity, double amount, const std::string& rationale) {
+    sqlite3_stmt* st = nullptr;
+    if (sqlite3_prepare_v2(db,
+            "INSERT INTO flags(item_id, rule_code, category, severity, amount, rationale) VALUES(?,?,?,?,?,?)",
+            -1, &st, nullptr) != SQLITE_OK) {
+        return false;
+    }
+    sqlite3_bind_int64(st, 1, itemId);
+    sqlite3_bind_text(st, 2, ruleCode.c_str(), -1, SQLITE_TRANSIENT);
+    sqlite3_bind_text(st, 3, category.c_str(), -1, SQLITE_TRANSIENT);
+    sqlite3_bind_int(st, 4, severity);
+    sqlite3_bind_double(st, 5, amount);
+    sqlite3_bind_text(st, 6, rationale.c_str(), -1, SQLITE_TRANSIENT);
+    bool ok = sqlite3_step(st) == SQLITE_ROW || sqlite3_changes(db) > 0;
+    sqlite3_finalize(st);
+    return ok;
+}
+
+std::vector<Flag> Database::ListRunFlags(int64_t runId) {
+    std::vector<Flag> out;
+    sqlite3_stmt* st = nullptr;
+    if (sqlite3_prepare_v2(db,
+            "SELECT f.id, f.item_id, f.rule_code, f.category, f.severity, f.amount, f.rationale "
+            "FROM flags f JOIN items i ON i.id = f.item_id WHERE i.run_id = ? "
+            "ORDER BY f.item_id, f.severity DESC", -1, &st, nullptr) != SQLITE_OK) {
+        return out;
+    }
+    sqlite3_bind_int64(st, 1, runId);
+    while (sqlite3_step(st) == SQLITE_ROW) {
+        Flag flag;
+        flag.id = sqlite3_column_int64(st, 0);
+        flag.itemId = sqlite3_column_int64(st, 1);
+        flag.ruleCode = ColumnText(st, 2);
+        flag.category = ColumnText(st, 3);
+        flag.severity = sqlite3_column_int(st, 4);
+        flag.amount = sqlite3_column_double(st, 5);
+        flag.rationale = ColumnText(st, 6);
+        out.push_back(std::move(flag));
+    }
+    sqlite3_finalize(st);
+    return out;
+}
+
 int64_t Database::ImportRun(const Run& run, const ParseReport& report) {
-    if (!Begin()) return 0;
-    int64_t runId = InsertRun(run);
-    if (runId == 0) {
+    auto fail = [&](const char* where) -> int64_t {
+        std::cerr << "ImportRun failed at " << where << ": " << sqlite3_errmsg(db) << std::endl;
         Rollback();
         return 0;
-    }
+    };
+
+    if (!Begin()) return fail("BEGIN");
+    int64_t runId = InsertRun(run);
+    if (runId == 0) return fail("runs insert");
+
+    std::unordered_map<std::string, int64_t> subIds;
     for (const Subaccount& sub : report.subaccounts) {
         int64_t subId = InsertSubaccount(runId, sub);
-        for (const Item& item : report.items) {
-            if (item.subaccount == sub.code) InsertItem(runId, subId, item);
+        if (subId == 0) return fail("subaccounts insert");
+        subIds[sub.code] = subId;
+    }
+
+    for (const Item& item : report.items) {
+        auto it = subIds.find(item.subaccount);
+        if (it == subIds.end()) {
+            Subaccount orphan;
+            orphan.code = item.subaccount;
+            orphan.isTotal = false;
+            int64_t orphanId = InsertSubaccount(runId, orphan);
+            if (orphanId == 0) return fail("orphan subaccount insert");
+            it = subIds.find(item.subaccount);
         }
+
+        int64_t itemId = InsertItem(runId, it->second, item);
+        if (itemId == 0) return fail("items insert");
+        (void)itemId;
     }
-    if (!UpdateRunStats(runId, static_cast<int>(report.items.size()), report.arithFail, 0)) {
-        Rollback();
-        return 0;
+
+    int flagged = ApplyRulesInternal(runId);
+    if (flagged < 0) return fail("rules apply");
+
+    if (!UpdateRunStats(runId, static_cast<int>(report.items.size()), flagged, 0)) {
+        return fail("run stats update");
     }
-    if (!Commit()) return 0;
+    if (!Commit()) return fail("COMMIT");
     return runId;
 }
 
@@ -480,12 +688,24 @@ bool Database::GetRun(int64_t id, Run& out) {
     return found;
 }
 
+int Database::CountRunsByFile(const std::string& file) {
+    sqlite3_stmt* st = nullptr;
+    if (sqlite3_prepare_v2(db, "SELECT COUNT(*) FROM runs WHERE file = ?", -1, &st, nullptr) != SQLITE_OK) {
+        return 0;
+    }
+    sqlite3_bind_text(st, 1, file.c_str(), -1, SQLITE_TRANSIENT);
+    int count = 0;
+    if (sqlite3_step(st) == SQLITE_ROW) count = sqlite3_column_int(st, 0);
+    sqlite3_finalize(st);
+    return count;
+}
+
 bool Database::DeleteRun(int64_t id, int& removedItems, double& removedSum) {
     sqlite3_stmt* st = nullptr;
     removedItems = 0;
     removedSum = 0.0;
     sqlite3_prepare_v2(db,
-        "SELECT COUNT(*), COALESCE(SUM(close_debit + close_credit), 0) FROM items WHERE run_id=?", -1, &st, nullptr);
+        "SELECT COUNT(*), COALESCE(SUM(close_debit - close_credit), 0) FROM items WHERE run_id=?", -1, &st, nullptr);
     sqlite3_bind_int64(st, 1, id);
     if (sqlite3_step(st) == SQLITE_ROW) {
         removedItems = sqlite3_column_int(st, 0);
@@ -568,4 +788,240 @@ bool Database::DeleteCategory(int64_t id) {
     sqlite3_step(st);
     sqlite3_finalize(st);
     return sqlite3_changes(db) > 0;
+}
+
+std::vector<Rule> Database::ListRules() {
+    std::vector<Rule> out;
+    sqlite3_stmt* st = nullptr;
+    if (sqlite3_prepare_v2(db,
+            "SELECT id, code, category, type, pattern, severity, rationale, source_doc, active "
+            "FROM rules ORDER BY code", -1, &st, nullptr) != SQLITE_OK) {
+        return out;
+    }
+    while (sqlite3_step(st) == SQLITE_ROW) {
+        Rule rule;
+        rule.id = sqlite3_column_int64(st, 0);
+        rule.code = ColumnText(st, 1);
+        rule.category = ColumnText(st, 2);
+        rule.type = ColumnText(st, 3);
+        rule.pattern = ColumnText(st, 4);
+        rule.severity = sqlite3_column_int(st, 5);
+        rule.rationale = ColumnText(st, 6);
+        rule.sourceDoc = ColumnText(st, 7);
+        rule.active = sqlite3_column_int(st, 8) != 0;
+        out.push_back(std::move(rule));
+    }
+    sqlite3_finalize(st);
+    return out;
+}
+
+bool Database::AddRule(const Rule& rule) {
+    if (rule.code.empty() || rule.category.empty() || rule.type.empty()) return false;
+    sqlite3_stmt* st = nullptr;
+    if (sqlite3_prepare_v2(db,
+            "INSERT INTO rules(code, category, type, pattern, severity, rationale, source_doc, active, updated_at) "
+            "VALUES(?,?,?,?,?,?,?,?,?)", -1, &st, nullptr) != SQLITE_OK) {
+        return false;
+    }
+    sqlite3_bind_text(st, 1, rule.code.c_str(), -1, SQLITE_TRANSIENT);
+    sqlite3_bind_text(st, 2, rule.category.c_str(), -1, SQLITE_TRANSIENT);
+    sqlite3_bind_text(st, 3, rule.type.c_str(), -1, SQLITE_TRANSIENT);
+    sqlite3_bind_text(st, 4, rule.pattern.c_str(), -1, SQLITE_TRANSIENT);
+    sqlite3_bind_int(st, 5, rule.severity);
+    sqlite3_bind_text(st, 6, rule.rationale.c_str(), -1, SQLITE_TRANSIENT);
+    sqlite3_bind_text(st, 7, rule.sourceDoc.c_str(), -1, SQLITE_TRANSIENT);
+    sqlite3_bind_int(st, 8, rule.active ? 1 : 0);
+    sqlite3_bind_text(st, 9, NowCompact().c_str(), -1, SQLITE_TRANSIENT);
+    bool ok = sqlite3_step(st) == SQLITE_ROW;
+    sqlite3_finalize(st);
+    return ok;
+}
+
+bool Database::UpdateRule(const Rule& rule) {
+    sqlite3_stmt* st = nullptr;
+    if (sqlite3_prepare_v2(db,
+            "UPDATE rules SET category=?, type=?, pattern=?, severity=?, rationale=?, source_doc=?, active=?, updated_at=? "
+            "WHERE id=?", -1, &st, nullptr) != SQLITE_OK) {
+        return false;
+    }
+    sqlite3_bind_text(st, 1, rule.category.c_str(), -1, SQLITE_TRANSIENT);
+    sqlite3_bind_text(st, 2, rule.type.c_str(), -1, SQLITE_TRANSIENT);
+    sqlite3_bind_text(st, 3, rule.pattern.c_str(), -1, SQLITE_TRANSIENT);
+    sqlite3_bind_int(st, 4, rule.severity);
+    sqlite3_bind_text(st, 5, rule.rationale.c_str(), -1, SQLITE_TRANSIENT);
+    sqlite3_bind_text(st, 6, rule.sourceDoc.c_str(), -1, SQLITE_TRANSIENT);
+    sqlite3_bind_int(st, 7, rule.active ? 1 : 0);
+    sqlite3_bind_text(st, 8, NowCompact().c_str(), -1, SQLITE_TRANSIENT);
+    sqlite3_bind_int64(st, 9, rule.id);
+    bool ok = sqlite3_changes(db) > 0;
+    sqlite3_finalize(st);
+    return ok;
+}
+
+bool Database::DeleteRule(int64_t id) {
+    sqlite3_stmt* st = nullptr;
+    sqlite3_prepare_v2(db, "DELETE FROM rules WHERE id=?", -1, &st, nullptr);
+    sqlite3_bind_int64(st, 1, id);
+    sqlite3_step(st);
+    sqlite3_finalize(st);
+    return sqlite3_changes(db) > 0;
+}
+
+std::vector<Term> Database::ListTerms() {
+    std::vector<Term> out;
+    sqlite3_stmt* st = nullptr;
+    if (sqlite3_prepare_v2(db,
+            "SELECT id, rule_code, term, term_norm, scope, origin, list_name, active "
+            "FROM terms ORDER BY term_norm", -1, &st, nullptr) != SQLITE_OK) {
+        return out;
+    }
+    while (sqlite3_step(st) == SQLITE_ROW) {
+        Term term;
+        term.id = sqlite3_column_int64(st, 0);
+        term.ruleCode = ColumnText(st, 1);
+        term.term = ColumnText(st, 2);
+        term.termNorm = ColumnText(st, 3);
+        term.scope = ColumnText(st, 4);
+        term.origin = ColumnText(st, 5);
+        term.listName = ColumnText(st, 6);
+        term.active = sqlite3_column_int(st, 7) != 0;
+        out.push_back(std::move(term));
+    }
+    sqlite3_finalize(st);
+    return out;
+}
+
+bool Database::AddTerm(const Term& term) {
+    if (term.term.empty()) return false;
+    Term copy = term;
+    copy.termNorm = NormalizeTextUtf8(copy.term);
+    if (copy.scope.empty()) copy.scope = "local";
+    if (copy.origin.empty()) copy.origin = "manual";
+    sqlite3_stmt* st = nullptr;
+    if (sqlite3_prepare_v2(db,
+            "INSERT INTO terms(rule_code, term, term_norm, scope, origin, list_name, active, created_at, updated_at) "
+            "VALUES(?,?,?,?,?,?,?, ?, ?)", -1, &st, nullptr) != SQLITE_OK) {
+        return false;
+    }
+    sqlite3_bind_text(st, 1, copy.ruleCode.c_str(), -1, SQLITE_TRANSIENT);
+    sqlite3_bind_text(st, 2, copy.term.c_str(), -1, SQLITE_TRANSIENT);
+    sqlite3_bind_text(st, 3, copy.termNorm.c_str(), -1, SQLITE_TRANSIENT);
+    sqlite3_bind_text(st, 4, copy.scope.c_str(), -1, SQLITE_TRANSIENT);
+    sqlite3_bind_text(st, 5, copy.origin.c_str(), -1, SQLITE_TRANSIENT);
+    sqlite3_bind_text(st, 6, copy.listName.c_str(), -1, SQLITE_TRANSIENT);
+    sqlite3_bind_int(st, 7, copy.active ? 1 : 0);
+    sqlite3_bind_text(st, 8, NowCompact().c_str(), -1, SQLITE_TRANSIENT);
+    sqlite3_bind_text(st, 9, NowCompact().c_str(), -1, SQLITE_TRANSIENT);
+    bool ok = sqlite3_step(st) == SQLITE_ROW;
+    sqlite3_finalize(st);
+    return ok;
+}
+
+bool Database::DeleteTerm(int64_t id) {
+    sqlite3_stmt* st = nullptr;
+    sqlite3_prepare_v2(db, "DELETE FROM terms WHERE id=?", -1, &st, nullptr);
+    sqlite3_bind_int64(st, 1, id);
+    sqlite3_step(st);
+    sqlite3_finalize(st);
+    return sqlite3_changes(db) > 0;
+}
+
+int Database::ApplyRules(int64_t runId) {
+    if (!db) return 0;
+    if (!Begin()) return 0;
+    int flagged = ApplyRulesInternal(runId);
+    if (flagged < 0) {
+        Rollback();
+        return 0;
+    }
+    if (!Commit()) {
+        Rollback();
+        return 0;
+    }
+    return flagged;
+}
+
+int Database::ApplyRulesInternal(int64_t runId) {
+    if (!db) return -1;
+    std::vector<Rule> rules = ListRules();
+    std::vector<Term> terms = ListTerms();
+    std::vector<ItemRecord> records = ListRunItems(runId);
+
+    std::vector<Item> items;
+    items.reserve(records.size());
+    for (const ItemRecord& rec : records) items.push_back(rec.item);
+
+    std::vector<std::vector<FlagResult>> flags = EvaluateRules(items, rules, terms);
+
+    std::cerr << "DBG apply rules=" << rules.size() << " items=" << items.size() << " totalflags=";
+    size_t total = 0;
+    for (auto& f : flags) total += f.size();
+    sqlite3_stmt* del = nullptr;
+    if (sqlite3_prepare_v2(db, "DELETE FROM flags WHERE item_id IN (SELECT id FROM items WHERE run_id=?)",
+                           -1, &del, nullptr) == SQLITE_OK) {
+        sqlite3_bind_int64(del, 1, runId);
+        sqlite3_step(del);
+        sqlite3_finalize(del);
+    }
+
+    sqlite3_stmt* insertFlag = nullptr;
+    sqlite3_prepare_v2(db,
+        "INSERT INTO flags(item_id, rule_code, category, severity, amount, rationale) VALUES(?,?,?,?,?,?)",
+        -1, &insertFlag, nullptr);
+    sqlite3_stmt* updateItem = nullptr;
+    sqlite3_prepare_v2(db, "UPDATE items SET rule_code=?, category=?, severity=? WHERE id=?",
+                       -1, &updateItem, nullptr);
+
+    int flagged = 0;
+    for (size_t i = 0; i < records.size(); ++i) {
+        const std::vector<FlagResult>& itemFlags = flags[i];
+        for (const FlagResult& flag : itemFlags) {
+            sqlite3_bind_int64(insertFlag, 1, records[i].id);
+            sqlite3_bind_text(insertFlag, 2, flag.ruleCode.c_str(), -1, SQLITE_TRANSIENT);
+            sqlite3_bind_text(insertFlag, 3, flag.category.c_str(), -1, SQLITE_TRANSIENT);
+            sqlite3_bind_int(insertFlag, 4, flag.severity);
+            sqlite3_bind_double(insertFlag, 5, flag.amount);
+            sqlite3_bind_text(insertFlag, 6, flag.rationale.c_str(), -1, SQLITE_TRANSIENT);
+            sqlite3_step(insertFlag);
+            sqlite3_reset(insertFlag);
+        }
+
+        const FlagResult* top = nullptr;
+        for (const FlagResult& flag : itemFlags) {
+            if (!top || flag.severity > top->severity) top = &flag;
+        }
+        sqlite3_bind_text(updateItem, 1, top ? top->ruleCode.c_str() : "", -1, SQLITE_TRANSIENT);
+        sqlite3_bind_text(updateItem, 2, top ? top->category.c_str() : "", -1, SQLITE_TRANSIENT);
+        sqlite3_bind_int(updateItem, 3, top ? top->severity : 0);
+        sqlite3_bind_int64(updateItem, 4, records[i].id);
+        sqlite3_step(updateItem);
+        sqlite3_reset(updateItem);
+        if (top) ++flagged;
+    }
+    sqlite3_finalize(insertFlag);
+    sqlite3_finalize(updateItem);
+
+    return flagged;
+}
+
+std::vector<SummaryRow> Database::RunSummary(int64_t runId) {
+    std::vector<SummaryRow> out;
+    sqlite3_stmt* st = nullptr;
+    if (sqlite3_prepare_v2(db,
+            "SELECT f.rule_code, f.category, COUNT(*), COALESCE(SUM(f.amount),0) "
+            "FROM flags f JOIN items i ON i.id = f.item_id WHERE i.run_id = ? "
+            "GROUP BY f.rule_code, f.category ORDER BY f.rule_code", -1, &st, nullptr) != SQLITE_OK) {
+        return out;
+    }
+    sqlite3_bind_int64(st, 1, runId);
+    while (sqlite3_step(st) == SQLITE_ROW) {
+        SummaryRow row;
+        row.ruleCode = ColumnText(st, 0);
+        row.category = ColumnText(st, 1);
+        row.count = sqlite3_column_int(st, 2);
+        row.amount = sqlite3_column_double(st, 3);
+        out.push_back(std::move(row));
+    }
+    sqlite3_finalize(st);
+    return out;
 }

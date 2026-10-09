@@ -53,6 +53,7 @@ set(APP_SOURCES
     src/domain/OdsReader.cpp
     src/domain/PositionParser.cpp
     src/domain/Utf8.cpp
+    src/domain/RulesEngine.cpp
     src/views/FormView.cpp
     src/views/ImportView.cpp
     src/views/SettingsView.cpp
@@ -86,9 +87,15 @@ add_custom_command(TARGET audit105 POST_BUILD
 )
 
 # --- Tests ---
-add_executable(test_db tests/test_db.cpp src/Database.cpp)
-target_include_directories(test_db PRIVATE src)
-target_link_libraries(test_db PRIVATE SQLite3::SQLite3)
+add_executable(test_db tests/test_db.cpp src/Database.cpp
+    src/domain/FormatDetector.cpp
+    src/domain/OdsReader.cpp
+    src/domain/PositionParser.cpp
+    src/domain/Utf8.cpp
+    src/domain/RulesEngine.cpp
+)
+target_include_directories(test_db PRIVATE src src/domain)
+target_link_libraries(test_db PRIVATE SQLite3::SQLite3 ZLIB::ZLIB)
 
 add_executable(test_parser tests/test_parser.cpp
     src/Database.cpp
@@ -96,9 +103,28 @@ add_executable(test_parser tests/test_parser.cpp
     src/domain/OdsReader.cpp
     src/domain/PositionParser.cpp
     src/domain/Utf8.cpp
+    src/domain/RulesEngine.cpp
 )
 target_include_directories(test_parser PRIVATE src src/domain)
 target_link_libraries(test_parser PRIVATE SQLite3::SQLite3 ZLIB::ZLIB)
+
+add_executable(test_views tests/test_views.cpp
+    src/App.cpp
+    src/Database.cpp
+    src/Widgets.cpp
+    src/ImGuiFileDialog.cpp
+    src/domain/FormatDetector.cpp
+    src/domain/OdsReader.cpp
+    src/domain/PositionParser.cpp
+    src/domain/Utf8.cpp
+    src/domain/RulesEngine.cpp
+    src/views/FormView.cpp
+    src/views/ImportView.cpp
+    src/views/SettingsView.cpp
+)
+target_include_directories(test_views PRIVATE src src/views src/domain ${imgui_SOURCE_DIR} ${imgui_SOURCE_DIR}/backends ${imgui_SOURCE_DIR}/misc/cpp)
+target_compile_definitions(test_views PRIVATE USE_STD_FILESYSTEM)
+target_link_libraries(test_views PRIVATE glfw SQLite3::SQLite3 ZLIB::ZLIB imgui_lib)
 
 
 # --- Установка ---

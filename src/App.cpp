@@ -14,8 +14,55 @@
 #include "views/FormView.h"
 #include "views/SettingsView.h"
 
+#include <algorithm>
+#include <fstream>
+#include <filesystem>
+
+namespace {
+std::string SessionPath() { return AppDataDir() + "/session.txt"; }
+}
+
 App::App() = default;
 App::~App() = default;
+
+void App::LoadSession() {
+    std::ifstream in(SessionPath());
+    if (!in) return;
+
+    std::string line;
+    while (std::getline(in, line)) {
+        if (line.empty()) continue;
+        if (line.rfind("last=", 0) == 0) {
+            lastDbPath = line.substr(5);
+        } else if (line.rfind("recent=", 0) == 0) {
+            recentDbPaths.push_back(line.substr(7));
+        }
+    }
+    if (lastDbPath.empty() && !recentDbPaths.empty()) lastDbPath = recentDbPaths.front();
+}
+
+void App::SaveSession() {
+    std::filesystem::create_directories(AppDataDir());
+    std::ofstream out(SessionPath());
+    if (!out) return;
+    out << "last=" << lastDbPath << "\n";
+    for (const auto& path : recentDbPaths) out << "recent=" << path << "\n";
+}
+
+std::string App::LastDb() const {
+    if (!lastDbPath.empty()) return lastDbPath;
+    if (!recentDbPaths.empty()) return recentDbPaths.front();
+    return DefaultDbPath();
+}
+
+void App::UpdateWindowTitle() {
+    if (!window) return;
+    std::string title = "Аудит счёта 105";
+    if (!dbPath.empty()) {
+        title += " — " + std::filesystem::path(dbPath).filename().string();
+    }
+    glfwSetWindowTitle(window, title.c_str());
+}
 
 void App::SetWindow(GLFWwindow* w) { window = w; }
 void App::SetMainDockId(ImGuiID id) { mainDockId = id; }
@@ -27,6 +74,8 @@ bool App::OpenDatabase(const std::string& path) {
         return false;
     }
     SetDbPath(db.Path());
+    AddRecentDb(db.Path());
+    UpdateWindowTitle();
     SetStatus("База открыта: " + db.Path());
     RefreshAllViews();
     return true;
@@ -39,6 +88,8 @@ bool App::SaveDatabaseAs(const std::string& path) {
         return false;
     }
     SetDbPath(db.Path());
+    AddRecentDb(db.Path());
+    UpdateWindowTitle();
     SetStatus("Копия базы: " + db.Path());
     return true;
 }
@@ -61,11 +112,13 @@ void App::SetDbPath(const std::string& path) {
 }
 
 void App::AddRecentDb(const std::string& path) {
-    for (const auto& p : recentDbPaths) {
-        if (p == path) return;
-    }
+    if (path.empty()) return;
+    lastDbPath = path;
+    auto it = std::find(recentDbPaths.begin(), recentDbPaths.end(), path);
+    if (it != recentDbPaths.end()) recentDbPaths.erase(it);
     recentDbPaths.insert(recentDbPaths.begin(), path);
     if (recentDbPaths.size() > 10) recentDbPaths.resize(10);
+    SaveSession();
 }
 
 void App::SetStatus(const std::string& text) { statusLine = text; }
@@ -84,7 +137,31 @@ void App::RefreshAllViews() {
 }
 
 void App::CloseAllViews() {
+    for (auto& view : views) {
+        view->RequestClose();
+        view->IsVisible = false;
+    }
     views.clear();
+    focusedView = nullptr;
+    SetStatus("Все формы закрыты");
+}
+
+void App::CloseView(BaseView* view) {
+    if (!view) return;
+    std::string title = view->GetTitle();
+    view->OnDeactivate();
+    view->RequestClose();
+    view->IsVisible = false;
+    if (focusedView == view) focusedView = nullptr;
+    SetStatus("Форма закрыта: " + title);
+}
+
+void App::CloseFocusedView() {
+    if (!focusedView) {
+        SetStatus("Нет активной формы (Ctrl+W)");
+        return;
+    }
+    CloseView(focusedView);
 }
 
 void App::ApplyTheme(int index) {
@@ -265,6 +342,18 @@ void App::RenderMenuBar() {
         }
         ImGui::SliderInt("Шрифт", &fontSize, 14, 40);
         ApplyFont(fontSize);
+
+        if (ImGui::BeginMenu(ICON_FA_TABLE "  Открытые формы")) {
+            if (views.empty()) ImGui::TextDisabled("Нет открытых форм");
+            for (auto& view : views) {
+                if (ImGui::MenuItem(view->GetTitle(), ICON_FA_XMARK "  закрыть")) {
+                    CloseView(view.get());
+                }
+            }
+            ImGui::Separator();
+            if (ImGui::MenuItem(ICON_FA_TRASH "  Закрыть все формы")) CloseAllViews();
+            ImGui::EndMenu();
+        }
         ImGui::EndMenu();
     }
 
@@ -289,6 +378,8 @@ void App::RenderStatusBar() {
         ImGui::SameLine();
         ImGui::TextDisabled("·  форм открыто: %zu", views.size());
         ImGui::SameLine();
+        ImGui::TextDisabled("·  Ctrl+W — закрыть активную форму");
+        ImGui::SameLine();
         ImGui::TextDisabled("·  база: %s", dbPath.empty() ? "не выбрана" : dbPath.c_str());
         ImGui::End();
     }
@@ -306,6 +397,12 @@ void App::RenderErrorPopup() {
 }
 
 void App::RenderViews() {
+    ImGuiIO& io = ImGui::GetIO();
+    if (io.KeyMods & ImGuiMod_Ctrl) {
+        if (ImGui::IsKeyPressed(ImGuiKey_W)) CloseFocusedView();
+    }
+
+    BaseView* currentFocus = nullptr;
     for (auto& view : views) {
         if (!view->IsVisible) continue;
         if (view->WantsDock && mainDockId) {
@@ -314,7 +411,17 @@ void App::RenderViews() {
             else view->WantsDock = false;
         }
         view->Render();
+        if (!view->IsOpen) view->IsVisible = false;
+        if (view->IsVisible && view->IsFocused) currentFocus = view.get();
     }
+
+    auto keepEnd = std::remove_if(views.begin(), views.end(),
+                                  [](const std::unique_ptr<BaseView>& view) {
+                                      return !view->IsVisible;
+                                  });
+    if (keepEnd != views.end()) views.erase(keepEnd, views.end());
+    if (!currentFocus && !views.empty()) currentFocus = views.back().get();
+    focusedView = currentFocus;
 
     RenderStatusBar();
     RenderErrorPopup();
