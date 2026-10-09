@@ -1,0 +1,19 @@
+[Desktop Entry]
+Version=1.0
+Type=Application
+Name=Audit 105
+Name[ru]=Аудит счёта 105
+GenericName=Account 105 audit system
+GenericName[ru]=Система аудита счёта 105
+Comment=Audit of account 105 (medical supplies, OMS) statements from 1C
+Comment[ru]=Аудит оборотов счёта 105 (МЗ, ОМС) из выгрузок 1С
+Exec=audit105 %f
+Icon=audit105
+TryExec=audit105
+Terminal=false
+Categories=Office;Finance;X-Accounting;
+Keywords=audit;accounting;medical;OMS;
+Keywords[ru]=аудит;бухгалтерия;медизделия;ОМС;
+MimeType=application/x-sqlite3;
+StartupNotify=true
+StartupWMClass=audit105

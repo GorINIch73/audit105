@@ -1,0 +1,7 @@
+build/
+*.db
+*.db-wal
+*.db-shm
+imgui.ini
+*.o
+*.tmp
