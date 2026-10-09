@@ -28,10 +28,6 @@ find_package(glfw3 3.3 REQUIRED)
 find_package(SQLite3 REQUIRED)
 find_package(ZLIB REQUIRED)
 find_package(OpenGL REQUIRED)
-if(UNIX AND NOT APPLE)
-  find_package(X11 REQUIRED)
-endif()
-
 add_library(imgui_lib STATIC
     ${imgui_SOURCE_DIR}/imgui.cpp
     ${imgui_SOURCE_DIR}/imgui_draw.cpp
@@ -53,6 +49,12 @@ set(APP_SOURCES
     src/App.cpp
     src/Database.cpp
     src/Widgets.cpp
+    src/domain/FormatDetector.cpp
+    src/domain/OdsReader.cpp
+    src/domain/PositionParser.cpp
+    src/domain/Utf8.cpp
+    src/views/FormView.cpp
+    src/views/ImportView.cpp
     src/views/SettingsView.cpp
     src/ImGuiFileDialog.cpp
 )
@@ -76,9 +78,6 @@ target_link_libraries(audit105 PRIVATE
     imgui_lib
 )
 
-if(UNIX AND NOT APPLE)
-    target_link_libraries(audit105 PRIVATE X11::X11)
-endif()
 
 add_custom_command(TARGET audit105 POST_BUILD
     COMMAND ${CMAKE_COMMAND} -E copy_directory
@@ -90,6 +89,16 @@ add_custom_command(TARGET audit105 POST_BUILD
 add_executable(test_db tests/test_db.cpp src/Database.cpp)
 target_include_directories(test_db PRIVATE src)
 target_link_libraries(test_db PRIVATE SQLite3::SQLite3)
+
+add_executable(test_parser tests/test_parser.cpp
+    src/Database.cpp
+    src/domain/FormatDetector.cpp
+    src/domain/OdsReader.cpp
+    src/domain/PositionParser.cpp
+    src/domain/Utf8.cpp
+)
+target_include_directories(test_parser PRIVATE src src/domain)
+target_link_libraries(test_parser PRIVATE SQLite3::SQLite3 ZLIB::ZLIB)
 
 
 # --- Установка ---

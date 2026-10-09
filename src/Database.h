@@ -1,5 +1,7 @@
 #pragma once
 
+#include "domain/PositionParser.h"
+
 #include <sqlite3.h>
 #include <cstdint>
 #include <string>
@@ -29,6 +31,15 @@ struct Category {
     bool active = true;
 };
 
+struct ItemRecord {
+    int64_t id = 0;
+    Item item;
+    std::string subaccount;
+    std::string category;
+    std::string ruleCode;
+    int severity = 0;
+};
+
 class Database {
 public:
     Database() = default;
@@ -52,6 +63,7 @@ public:
     std::string IntegrityReport();
 
     int64_t InsertRun(const Run& run);
+    int64_t ImportRun(const Run& run, const ParseReport& report);
     std::vector<Run> ListRuns(const std::string& organization,
                               const std::string& period,
                               const std::string& note,
@@ -60,6 +72,12 @@ public:
     bool GetRun(int64_t id, Run& out);
     bool DeleteRun(int64_t id, int& removedItems, double& removedSum);
     bool UpdateRunStats(int64_t id, int items, int flagged, int noted);
+
+    int64_t InsertSubaccount(int64_t runId, const Subaccount& sub);
+    int64_t InsertItem(int64_t runId, int64_t subaccountId, const Item& item);
+
+    std::vector<ItemRecord> ListRunItems(int64_t runId);
+    std::vector<Subaccount> ListSubaccounts(int64_t runId);
 
     std::vector<Category> ListCategories();
     bool AddCategory(const Category& cat);

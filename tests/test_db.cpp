@@ -1,5 +1,6 @@
 #include "../src/Database.h"
 
+#include <cstdio>
 #include <iostream>
 #include <string>
 
@@ -16,6 +17,9 @@ static void Check(bool condition, const std::string& what) {
 
 int main() {
     const std::string path = "/tmp/audit105_test.db";
+    std::remove(path.c_str());
+    std::remove((path + "-wal").c_str());
+    std::remove((path + "-shm").c_str());
     Database db;
     if (!db.Open(path)) {
         std::cerr << "open failed\n";

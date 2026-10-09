@@ -1,4 +1,5 @@
 #include "Widgets.h"
+#include "domain/Utf8.h"
 
 #include <algorithm>
 #include <cctype>
@@ -81,15 +82,10 @@ bool ComboWithFilter(const char* label, const std::vector<std::string>& options,
     if (ImGui::BeginPopup(popupId.c_str())) {
         InputTextSync("Фильтр", filter, 220.0f);
         ImGui::Separator();
-        std::string needle = filter;
-        std::transform(needle.begin(), needle.end(), needle.begin(),
-                       [](unsigned char c) { return std::tolower(c); });
+        const std::string needle = NormalizeTextUtf8(filter);
         if (options.empty()) ImGui::TextDisabled("(пусто)");
         for (size_t i = 0; i < options.size(); ++i) {
-            std::string opt = options[i];
-            std::transform(opt.begin(), opt.end(), opt.begin(),
-                           [](unsigned char c) { return std::tolower(c); });
-            if (needle.empty() || opt.find(needle) != std::string::npos) {
+            if (needle.empty() || ContainsUtf8(options[i], needle)) {
                 if (ImGui::Selectable(options[i].c_str(), selected == (int)i)) {
                     selected = (int)i;
                     changed = true;

@@ -10,6 +10,8 @@
 #include "ImGuiFileDialog.h"
 #include "PlatformUtils.h"
 #include "Widgets.h"
+#include "views/ImportView.h"
+#include "views/FormView.h"
 #include "views/SettingsView.h"
 
 App::App() = default;
@@ -220,14 +222,16 @@ void App::RenderMenuBar() {
     }
 
     if (ImGui::BeginMenu(ICON_FA_UPLOAD " Импорт")) {
-        ImGui::MenuItem(ICON_FA_FILE_IMPORT " Импорт оборота (ODS/XLSX/XML)", nullptr, false, true);
-        ImGui::TextDisabled("Этап 3");
+        if (ImGui::MenuItem(ICON_FA_FILE_IMPORT " Импорт оборота (ODS/XLSX/XML)")) {
+            CreateView<ImportView>("Импорт оборота");
+        }
         ImGui::EndMenu();
     }
 
     if (ImGui::BeginMenu(ICON_FA_STETHOSCOPE " Форма МЗ")) {
-        ImGui::MenuItem(ICON_FA_TABLE " Таблица позиций", nullptr, false, true);
-        ImGui::TextDisabled("Этап 4");
+        if (ImGui::MenuItem(ICON_FA_TABLE " Таблица позиций")) {
+            CreateView<FormView>("Форма МЗ");
+        }
         ImGui::EndMenu();
     }
 
@@ -301,13 +305,7 @@ void App::RenderErrorPopup() {
     }
 }
 
-void App::Render() {
-    ImGui::DockSpaceOverViewport(0, ImGui::GetMainViewport());
-    ImGuiDockNode* central = ImGui::DockBuilderGetCentralNode(0);
-    if (central) mainDockId = central->ID;
-
-    RenderMenuBar();
-
+void App::RenderViews() {
     for (auto& view : views) {
         if (!view->IsVisible) continue;
         if (view->WantsDock && mainDockId) {

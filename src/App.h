@@ -18,7 +18,9 @@ public:
     void SetWindow(GLFWwindow* window);
     void SetMainDockId(ImGuiID dockId);
 
-    void Render();
+    void RenderMenuBar();
+    void RenderViews();
+    bool HasError() const { return !errorMessage.empty(); }
 
     template <typename T>
     T* CreateView(const std::string& title = "") {
@@ -63,7 +65,6 @@ public:
     bool isImporting = false;
 
 private:
-    void RenderMenuBar();
     void RenderStatusBar();
     void RenderErrorPopup();
 

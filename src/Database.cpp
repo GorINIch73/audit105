@@ -20,6 +20,11 @@ std::string NowIso() {
     return buf;
 }
 
+std::string ColumnText(sqlite3_stmt* st, int col) {
+    const unsigned char* text = sqlite3_column_text(st, col);
+    return text ? std::string(reinterpret_cast<const char*>(text)) : std::string();
+}
+
 std::string NowCompact() {
     auto now = std::chrono::system_clock::now();
     std::time_t t = std::chrono::system_clock::to_time_t(now);
@@ -268,6 +273,141 @@ int64_t Database::InsertRun(const Run& run) {
     sqlite3_step(st);
     sqlite3_finalize(st);
     return sqlite3_last_insert_rowid(db);
+}
+
+int64_t Database::InsertSubaccount(int64_t runId, const Subaccount& sub) {
+    sqlite3_stmt* st = nullptr;
+    if (sqlite3_prepare_v2(db,
+            "INSERT INTO subaccounts(run_id, code, is_total, opening, debit, credit, closing) VALUES(?,?,?,?,?,?,?)",
+            -1, &st, nullptr) != SQLITE_OK) {
+        return 0;
+    }
+    sqlite3_bind_int64(st, 1, runId);
+    sqlite3_bind_text(st, 2, sub.code.c_str(), -1, SQLITE_TRANSIENT);
+    sqlite3_bind_int(st, 3, sub.isTotal ? 1 : 0);
+    sqlite3_bind_double(st, 4, sub.opening);
+    sqlite3_bind_double(st, 5, sub.debit);
+    sqlite3_bind_double(st, 6, sub.credit);
+    sqlite3_bind_double(st, 7, sub.closing);
+    sqlite3_step(st);
+    sqlite3_finalize(st);
+    return sqlite3_last_insert_rowid(db);
+}
+
+int64_t Database::InsertItem(int64_t runId, int64_t subaccountId, const Item& item) {
+    sqlite3_stmt* st = nullptr;
+    if (sqlite3_prepare_v2(db,
+            "INSERT INTO items(run_id, subaccount_id, row_no, name_raw, name_norm, "
+            "open_debit, open_credit, in_debit, out_credit, close_debit, close_credit, "
+            "qty_open, qty_in, qty_out, qty_close, unit_price, arith_ok) "
+            "VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)", -1, &st, nullptr) != SQLITE_OK) {
+        return 0;
+    }
+    sqlite3_bind_int64(st, 1, runId);
+    sqlite3_bind_int64(st, 2, subaccountId);
+    sqlite3_bind_int(st, 3, item.rowNo);
+    sqlite3_bind_text(st, 4, item.nameRaw.c_str(), -1, SQLITE_TRANSIENT);
+    sqlite3_bind_text(st, 5, item.nameNorm.c_str(), -1, SQLITE_TRANSIENT);
+    sqlite3_bind_double(st, 6, item.openDebit);
+    sqlite3_bind_double(st, 7, item.openCredit);
+    sqlite3_bind_double(st, 8, item.inDebit);
+    sqlite3_bind_double(st, 9, item.outCredit);
+    sqlite3_bind_double(st, 10, item.closeDebit);
+    sqlite3_bind_double(st, 11, item.closeCredit);
+    sqlite3_bind_double(st, 12, item.qtyOpen);
+    sqlite3_bind_double(st, 13, item.qtyIn);
+    sqlite3_bind_double(st, 14, item.qtyOut);
+    sqlite3_bind_double(st, 15, item.qtyClose);
+    sqlite3_bind_double(st, 16, item.unitPrice);
+    sqlite3_bind_int(st, 17, item.arithOk ? 1 : 0);
+    sqlite3_step(st);
+    sqlite3_finalize(st);
+    return sqlite3_last_insert_rowid(db);
+}
+
+std::vector<Subaccount> Database::ListSubaccounts(int64_t runId) {
+    std::vector<Subaccount> out;
+    sqlite3_stmt* st = nullptr;
+    if (sqlite3_prepare_v2(db,
+            "SELECT code, is_total, opening, debit, credit, closing FROM subaccounts "
+            "WHERE run_id=? ORDER BY code", -1, &st, nullptr) != SQLITE_OK) {
+        return out;
+    }
+    sqlite3_bind_int64(st, 1, runId);
+    while (sqlite3_step(st) == SQLITE_ROW) {
+        Subaccount sub;
+        sub.code = ColumnText(st, 0);
+        sub.isTotal = sqlite3_column_int(st, 1) != 0;
+        sub.opening = sqlite3_column_double(st, 2);
+        sub.debit = sqlite3_column_double(st, 3);
+        sub.credit = sqlite3_column_double(st, 4);
+        sub.closing = sqlite3_column_double(st, 5);
+        out.push_back(std::move(sub));
+    }
+    sqlite3_finalize(st);
+    return out;
+}
+
+std::vector<ItemRecord> Database::ListRunItems(int64_t runId) {
+    std::vector<ItemRecord> out;
+    sqlite3_stmt* st = nullptr;
+    if (sqlite3_prepare_v2(db,
+            "SELECT i.id, i.row_no, i.name_raw, i.name_norm, s.code, "
+            "i.open_debit, i.open_credit, i.in_debit, i.out_credit, i.close_debit, i.close_credit, "
+            "i.qty_open, i.qty_in, i.qty_out, i.qty_close, i.unit_price, i.arith_ok, "
+            "i.rule_code, i.category, i.severity "
+            "FROM items i JOIN subaccounts s ON s.id = i.subaccount_id "
+            "WHERE i.run_id = ? ORDER BY i.row_no", -1, &st, nullptr) != SQLITE_OK) {
+        return out;
+    }
+    sqlite3_bind_int64(st, 1, runId);
+    while (sqlite3_step(st) == SQLITE_ROW) {
+        ItemRecord rec;
+        rec.id = sqlite3_column_int64(st, 0);
+        rec.item.rowNo = sqlite3_column_int(st, 1);
+        rec.item.nameRaw = ColumnText(st, 2);
+        rec.item.nameNorm = ColumnText(st, 3);
+        rec.subaccount = ColumnText(st, 4);
+        rec.item.openDebit = sqlite3_column_double(st, 5);
+        rec.item.openCredit = sqlite3_column_double(st, 6);
+        rec.item.inDebit = sqlite3_column_double(st, 7);
+        rec.item.outCredit = sqlite3_column_double(st, 8);
+        rec.item.closeDebit = sqlite3_column_double(st, 9);
+        rec.item.closeCredit = sqlite3_column_double(st, 10);
+        rec.item.qtyOpen = sqlite3_column_double(st, 11);
+        rec.item.qtyIn = sqlite3_column_double(st, 12);
+        rec.item.qtyOut = sqlite3_column_double(st, 13);
+        rec.item.qtyClose = sqlite3_column_double(st, 14);
+        rec.item.unitPrice = sqlite3_column_double(st, 15);
+        rec.item.arithOk = sqlite3_column_int(st, 16) != 0;
+        rec.ruleCode = ColumnText(st, 17);
+        rec.category = ColumnText(st, 18);
+        rec.severity = sqlite3_column_int(st, 19);
+        out.push_back(std::move(rec));
+    }
+    sqlite3_finalize(st);
+    return out;
+}
+
+int64_t Database::ImportRun(const Run& run, const ParseReport& report) {
+    if (!Begin()) return 0;
+    int64_t runId = InsertRun(run);
+    if (runId == 0) {
+        Rollback();
+        return 0;
+    }
+    for (const Subaccount& sub : report.subaccounts) {
+        int64_t subId = InsertSubaccount(runId, sub);
+        for (const Item& item : report.items) {
+            if (item.subaccount == sub.code) InsertItem(runId, subId, item);
+        }
+    }
+    if (!UpdateRunStats(runId, static_cast<int>(report.items.size()), report.arithFail, 0)) {
+        Rollback();
+        return 0;
+    }
+    if (!Commit()) return 0;
+    return runId;
 }
 
 static void BindLike(sqlite3_stmt* st, int pos, const std::string& value) {

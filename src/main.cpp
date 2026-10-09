@@ -15,6 +15,7 @@
 
 #include "AboutDialog.h"
 #include "App.h"
+#include "IconsFontAwesome6.h"
 #include "ImGuiFileDialog.h"
 #include "PlatformUtils.h"
 
@@ -30,14 +31,13 @@ static std::string ParseArg(int argc, char** argv, const std::string& flag) {
 }
 
 static void HandleDbDialog(App& app, const char* key, bool saveAs) {
-    if (ImGuiFileDialog::Instance()->Display(key)) {
-        if (ImGuiFileDialog::Instance()->IsOk()) {
-            const std::string path = ImGuiFileDialog::Instance()->GetFilePathName();
-            if (saveAs) app.SaveDatabaseAs(path);
-            else app.OpenDatabase(path);
-        }
-        ImGuiFileDialog::Instance()->Close();
+    if (!ImGuiFileDialog::Instance()->Display(key)) return;
+    if (ImGuiFileDialog::Instance()->IsOk()) {
+        const std::string path = ImGuiFileDialog::Instance()->GetFilePathName();
+        if (saveAs) app.SaveDatabaseAs(path);
+        else app.OpenDatabase(path);
     }
+    ImGuiFileDialog::Instance()->Close();
 }
 
 int main(int argc, char** argv) {
@@ -45,12 +45,6 @@ int main(int argc, char** argv) {
     constexpr int kIdleFps = 15;
     constexpr auto kMinFrameTime = std::chrono::duration<double>(1.0 / kMaxFps);
     constexpr double kIdleWaitTime = 1.0 / kIdleFps;
-
-    App app;
-    app.SetDbPath(ParseArg(argc, argv, "--db"));
-    if (app.DbPath().empty()) app.SetDbPath(DefaultDbPath());
-    app.refsPath = ParseArg(argc, argv, "--refs");
-    if (app.refsPath.empty()) app.refsPath = "refs";
 
     glfwSetErrorCallback(glfw_error_callback);
     if (!glfwInit()) {
@@ -62,9 +56,10 @@ int main(int argc, char** argv) {
     glfwWindowHint(GLFW_CONTEXT_VERSION_MAJOR, 3);
     glfwWindowHint(GLFW_CONTEXT_VERSION_MINOR, 3);
     glfwWindowHint(GLFW_OPENGL_PROFILE, GLFW_OPENGL_CORE_PROFILE);
+    glfwWindowHint(GLFW_OPENGL_FORWARD_COMPAT, GL_TRUE);
 
     GLFWwindow* window = glfwCreateWindow(1280, 720, "Аудит счёта 105", nullptr, nullptr);
-    if (!window) {
+    if (window == nullptr) {
         std::cerr << "Failed to create GLFW window" << std::endl;
         glfwTerminate();
         return 1;
@@ -75,20 +70,22 @@ int main(int argc, char** argv) {
     IMGUI_CHECKVERSION();
     ImGui::CreateContext();
     ImGuiIO& io = ImGui::GetIO();
+    static std::string iniPath = AppDataDir() + "/imgui.ini";
+    io.IniFilename = iniPath.c_str();
     io.ConfigFlags |= ImGuiConfigFlags_NavEnableKeyboard;
     io.ConfigFlags |= ImGuiConfigFlags_DockingEnable;
 
-    std::filesystem::create_directories(AppDataDir());
-    static std::string iniPath = AppDataDir() + "/imgui.ini";
-    io.IniFilename = iniPath.c_str();
+    ImGui_ImplGlfw_InitForOpenGL(window, true);
+    ImGui_ImplOpenGL3_Init(glsl_version);
 
+    App app;
     app.SetWindow(window);
+    app.SetDbPath(ParseArg(argc, argv, "--db").empty() ? DefaultDbPath() : ParseArg(argc, argv, "--db"));
+    app.refsPath = ParseArg(argc, argv, "--refs").empty() ? "refs" : ParseArg(argc, argv, "--refs");
+
     app.ApplyTheme(0);
     app.ApplyFont(22);
     app.OpenDatabase(app.DbPath());
-
-    ImGui_ImplGlfw_InitForOpenGL(window, true);
-    ImGui_ImplOpenGL3_Init(glsl_version);
 
     AboutInfo about;
     about.dbPath = app.DbPath();
@@ -97,19 +94,29 @@ int main(int argc, char** argv) {
     while (!glfwWindowShouldClose(window)) {
         const auto frameStart = std::chrono::steady_clock::now();
 
-        const bool isIdle = app.views.empty() && !app.showAbout && !app.isImporting;
-        if (isIdle) glfwWaitEventsTimeout(kIdleWaitTime);
-        else glfwPollEvents();
+        const bool isIdle = app.views.empty() && !app.showAbout &&
+                            !app.isImporting && !app.HasError();
+        if (isIdle) {
+            glfwWaitEventsTimeout(kIdleWaitTime);
+        } else {
+            glfwPollEvents();
+        }
 
         ImGui_ImplOpenGL3_NewFrame();
         ImGui_ImplGlfw_NewFrame();
         ImGui::NewFrame();
 
-        app.Render();
+        ImGuiID mainDockId = ImGui::DockSpaceOverViewport(0, ImGui::GetMainViewport());
+        ImGuiDockNode* centralDockNode = ImGui::DockBuilderGetCentralNode(mainDockId);
+        app.SetMainDockId(centralDockNode ? centralDockNode->ID : mainDockId);
+
+        app.RenderMenuBar();
 
         HandleDbDialog(app, "NewDbDlg", false);
         HandleDbDialog(app, "OpenDbDlg", false);
         HandleDbDialog(app, "SaveDbAsDlg", true);
+
+        app.RenderViews();
 
         if (app.showAbout) {
             about.dbPath = app.DbPath();
@@ -118,29 +125,27 @@ int main(int argc, char** argv) {
         }
 
         ImGui::Render();
-        int displayW, displayH;
-        glfwGetFramebufferSize(window, &displayW, &displayH);
-        glViewport(0, 0, displayW, displayH);
+        int display_w, display_h;
+        glfwGetFramebufferSize(window, &display_w, &display_h);
+        glViewport(0, 0, display_w, display_h);
+        glClearColor(0.45f, 0.55f, 0.60f, 1.00f);
+        glClear(GL_COLOR_BUFFER_BIT);
         ImGui_ImplOpenGL3_RenderDrawData(ImGui::GetDrawData());
-
-        if (io.ConfigFlags & ImGuiConfigFlags_ViewportsEnable) {
-            GLFWwindow* backup = glfwGetCurrentContext();
-            ImGui::UpdatePlatformWindows();
-            ImGui::RenderPlatformWindowsDefault();
-            glfwMakeContextCurrent(backup);
-        }
 
         glfwSwapBuffers(window);
 
-        const auto elapsed = std::chrono::steady_clock::now() - frameStart;
-        if (elapsed < kMinFrameTime) {
-            std::this_thread::sleep_for(kMinFrameTime - elapsed);
+        const auto frameTime = std::chrono::steady_clock::now() - frameStart;
+        if (frameTime < kMinFrameTime) {
+            std::this_thread::sleep_for(kMinFrameTime - frameTime);
         }
     }
+
+    app.SaveAllViews();
 
     ImGui_ImplOpenGL3_Shutdown();
     ImGui_ImplGlfw_Shutdown();
     ImGui::DestroyContext();
+
     glfwDestroyWindow(window);
     glfwTerminate();
     return 0;
