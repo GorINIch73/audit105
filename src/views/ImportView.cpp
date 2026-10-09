@@ -72,7 +72,7 @@ void ImportView::Render() {
             IGFD::FileDialogConfig config;
             config.path = start;
             ImGuiFileDialog::Instance()->OpenDialog("ImportFile", "Импорт оборота",
-                                                   "*.ods,*.xlsx,*.xls,*.xml", config);
+                                                   "Оборот{.ods,.xlsx,.xls,.xml}", config);
         }
 
         if (ImGuiFileDialog::Instance()->Display("ImportFile", ImGuiWindowFlags_NoCollapse,
