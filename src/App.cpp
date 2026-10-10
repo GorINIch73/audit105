@@ -12,6 +12,14 @@
 #include "Widgets.h"
 #include "views/ImportView.h"
 #include "views/FormView.h"
+#include "views/RulesView.h"
+#include "views/RulesEditorView.h"
+#include "views/CategoriesEditorView.h"
+#include "views/TermsEditorView.h"
+#include "views/ListsEditorView.h"
+#include "views/ReportView.h"
+#include "views/RunsView.h"
+#include "views/CompareView.h"
 #include "views/SettingsView.h"
 
 #include <algorithm>
@@ -77,6 +85,8 @@ bool App::OpenDatabase(const std::string& path) {
     AddRecentDb(db.Path());
     UpdateWindowTitle();
     SetStatus("База открыта: " + db.Path());
+    rulesVersion = 0;
+    runRulesVersion.clear();
     RefreshAllViews();
     return true;
 }
@@ -122,6 +132,30 @@ void App::AddRecentDb(const std::string& path) {
 }
 
 void App::SetStatus(const std::string& text) { statusLine = text; }
+
+void App::MarkRulesChanged() { ++rulesVersion; }
+
+int App::RunRulesVersion(int64_t runId) const {
+    auto it = runRulesVersion.find(runId);
+    return it == runRulesVersion.end() ? 0 : it->second;
+}
+
+bool App::RulesOutOfDate(int64_t runId) const {
+    return RunRulesVersion(runId) != rulesVersion;
+}
+
+void App::MarkRunRulesApplied(int64_t runId) {
+    if (runId > 0) runRulesVersion[runId] = rulesVersion;
+}
+
+int App::ReapplyRules(int64_t runId) {
+    if (!HasDatabase() || runId <= 0) return 0;
+    int flagged = db.ApplyRules(runId);
+    runRulesVersion[runId] = rulesVersion;
+    for (auto& view : views) view->RefreshData();
+    SetStatus("Правила переприменены: отмечено позиций — " + std::to_string(flagged));
+    return flagged;
+}
 
 void App::ShowError(const std::string& message) { errorMessage = message; }
 
@@ -313,22 +347,39 @@ void App::RenderMenuBar() {
     }
 
     if (ImGui::BeginMenu(ICON_FA_GAVEL " Правила")) {
-        ImGui::MenuItem(ICON_FA_LIST " Категории и правила", nullptr, false, true);
-        ImGui::TextDisabled("Этап 5");
+        if (ImGui::MenuItem(ICON_FA_LIST " Правила")) {
+            CreateView<RulesEditorView>("Правила");
+        }
+        if (ImGui::MenuItem(ICON_FA_TAGS " Категории")) {
+            CreateView<CategoriesEditorView>("Категории");
+        }
+        if (ImGui::MenuItem(ICON_FA_BOOK_OPEN " Термины и списки")) {
+            CreateView<TermsEditorView>("Термины");
+        }
+        if (ImGui::MenuItem(ICON_FA_LIST " Перечни")) {
+            CreateView<ListsEditorView>("Перечни");
+        }
+        ImGui::Separator();
+        if (ImGui::MenuItem(ICON_FA_CHART_PIE " Сводка и очередь")) {
+            CreateView<RulesView>("Сводка правил");
+        }
+        ImGui::EndMenu();
+    }
+
+    if (ImGui::BeginMenu(ICON_FA_LIST_CHECK " Реестр")) {
+        if (ImGui::MenuItem(ICON_FA_DATABASE " Прогоны и фильтры")) {
+            CreateView<RunsView>("Реестр прогонов");
+        }
         ImGui::EndMenu();
     }
 
     if (ImGui::BeginMenu(ICON_FA_CHART_PIE " Отчёты")) {
-        ImGui::MenuItem(ICON_FA_FILE_LINES " Сводка по прогону", nullptr, false, true);
-        ImGui::TextDisabled("Этап 7");
-        ImGui::EndMenu();
-    }
-
-    if (ImGui::BeginMenu(ICON_FA_BOOK " Справочники")) {
-        ImGui::MenuItem(ICON_FA_TAGS " Категории", nullptr, false, true);
-        ImGui::MenuItem(ICON_FA_HASHTAG " Правила", nullptr, false, true);
-        ImGui::MenuItem(ICON_FA_BOOK_OPEN " Термины", nullptr, false, true);
-        ImGui::TextDisabled("Этап 8");
+        if (ImGui::MenuItem(ICON_FA_FILE_LINES " Сводка и экспорт")) {
+            CreateView<ReportView>("Отчёт");
+        }
+        if (ImGui::MenuItem(ICON_FA_CODE_COMPARE " Сравнение прогонов")) {
+            CreateView<CompareView>("Сравнение прогонов");
+        }
         ImGui::EndMenu();
     }
 

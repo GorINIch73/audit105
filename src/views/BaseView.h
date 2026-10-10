@@ -2,7 +2,6 @@
 
 #include "imgui.h"
 #include "imgui_internal.h"
-#include "IconsFontAwesome6.h"
 #include <string>
 #include <vector>
 
@@ -29,6 +28,10 @@ public:
 
     bool BeginWindow() {
         if (!IsVisible || !IsOpen) return false;
+        ImGuiWindow* existing = ImGui::FindWindowByName(GetTitle());
+        if (!existing || !existing->DockNode) {
+            ImGui::SetNextWindowSizeConstraints(ImVec2(900.0f, 420.0f), ImVec2(10000.0f, 10000.0f));
+        }
         if (!ImGui::Begin(GetTitle(), &IsOpen)) {
             ImGui::End();
             if (!IsOpen) IsVisible = false;
@@ -44,13 +47,6 @@ public:
 
     void RequestClose() { IsOpen = false; }
     bool IsClosing() const { return !IsOpen; }
-
-    void RenderCloseBar() {
-        if (ImGui::Button(ICON_FA_XMARK "  Закрыть форму")) RequestClose();
-        ImGui::SameLine();
-        ImGui::TextDisabled("или крестик в заголовке / Ctrl+W");
-        ImGui::Separator();
-    }
 
     bool IsVisible = false;
     bool IsOpen = true;

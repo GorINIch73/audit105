@@ -51,11 +51,22 @@ set(APP_SOURCES
     src/Widgets.cpp
     src/domain/FormatDetector.cpp
     src/domain/OdsReader.cpp
+    src/domain/XlsxReader.cpp
+    src/domain/XmlReader.cpp
+    src/domain/Zip.cpp
     src/domain/PositionParser.cpp
     src/domain/Utf8.cpp
     src/domain/RulesEngine.cpp
     src/views/FormView.cpp
     src/views/ImportView.cpp
+    src/views/RulesView.cpp
+    src/views/RulesEditorView.cpp
+    src/views/CategoriesEditorView.cpp
+    src/views/TermsEditorView.cpp
+    src/views/ListsEditorView.cpp
+    src/views/ReportView.cpp
+    src/views/RunsView.cpp
+    src/views/CompareView.cpp
     src/views/SettingsView.cpp
     src/ImGuiFileDialog.cpp
 )
@@ -90,6 +101,9 @@ add_custom_command(TARGET audit105 POST_BUILD
 add_executable(test_db tests/test_db.cpp src/Database.cpp
     src/domain/FormatDetector.cpp
     src/domain/OdsReader.cpp
+    src/domain/XlsxReader.cpp
+    src/domain/XmlReader.cpp
+    src/domain/Zip.cpp
     src/domain/PositionParser.cpp
     src/domain/Utf8.cpp
     src/domain/RulesEngine.cpp
@@ -101,12 +115,22 @@ add_executable(test_parser tests/test_parser.cpp
     src/Database.cpp
     src/domain/FormatDetector.cpp
     src/domain/OdsReader.cpp
+    src/domain/XlsxReader.cpp
+    src/domain/XmlReader.cpp
+    src/domain/Zip.cpp
     src/domain/PositionParser.cpp
     src/domain/Utf8.cpp
     src/domain/RulesEngine.cpp
 )
 target_include_directories(test_parser PRIVATE src src/domain)
 target_link_libraries(test_parser PRIVATE SQLite3::SQLite3 ZLIB::ZLIB)
+
+add_executable(test_rules tests/test_rules.cpp
+    src/domain/RulesEngine.cpp
+    src/domain/PositionParser.cpp
+    src/domain/Utf8.cpp
+)
+target_include_directories(test_rules PRIVATE src src/domain)
 
 add_executable(test_views tests/test_views.cpp
     src/App.cpp
@@ -115,11 +139,22 @@ add_executable(test_views tests/test_views.cpp
     src/ImGuiFileDialog.cpp
     src/domain/FormatDetector.cpp
     src/domain/OdsReader.cpp
+    src/domain/XlsxReader.cpp
+    src/domain/XmlReader.cpp
+    src/domain/Zip.cpp
     src/domain/PositionParser.cpp
     src/domain/Utf8.cpp
     src/domain/RulesEngine.cpp
     src/views/FormView.cpp
     src/views/ImportView.cpp
+    src/views/RulesView.cpp
+    src/views/RulesEditorView.cpp
+    src/views/CategoriesEditorView.cpp
+    src/views/TermsEditorView.cpp
+    src/views/ListsEditorView.cpp
+    src/views/ReportView.cpp
+    src/views/RunsView.cpp
+    src/views/CompareView.cpp
     src/views/SettingsView.cpp
 )
 target_include_directories(test_views PRIVATE src src/views src/domain ${imgui_SOURCE_DIR} ${imgui_SOURCE_DIR}/backends ${imgui_SOURCE_DIR}/misc/cpp)

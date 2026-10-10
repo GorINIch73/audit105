@@ -1,6 +1,8 @@
 #include "../src/Database.h"
 #include "../src/domain/FormatDetector.h"
 #include "../src/domain/OdsReader.h"
+#include "../src/domain/XlsxReader.h"
+#include "../src/domain/XmlReader.h"
 #include "../src/domain/PositionParser.h"
 #include "../src/domain/Utf8.h"
 
@@ -150,6 +152,31 @@ static void TestFile(const std::string& path, const Expectations& exp) {
     std::cout << db.IntegrityReport() << "\n";
 }
 
+static void TestFormatReader(const std::string& path, int expectedPositions) {
+    Spreadsheet sheet;
+    std::string error;
+    InputFormat format = DetectFormat(path);
+    bool ok = false;
+    if (format == InputFormat::Xlsx) ok = ReadXlsx(path, sheet, error);
+    else if (format == InputFormat::Xml) ok = ReadXml(path, sheet, error);
+    else ok = ReadOds(path, sheet, error);
+
+    if (!ok) {
+        std::cout << "FAIL: read " << path << ": " << error << "\n";
+        ++failures;
+        return;
+    }
+
+    ParseReport report = ParsePositions(sheet);
+    std::cout << path << ": строк " << sheet.RowCount()
+              << ", позиций " << report.items.size()
+              << ", подитогов " << report.subtotalRows
+              << ", арифметика не сходится " << report.arithFail << "\n";
+    Check(static_cast<int>(report.items.size()) == expectedPositions, "position count matches ODS");
+    Check(report.arithFail == 0, "positions arithmetically consistent");
+    Check(!sheet.sheetName.empty(), "sheet name found");
+}
+
 int main() {
     TestUtf8();
     TestNumbers();
@@ -157,6 +184,8 @@ int main() {
              Expectations{1639, 7, 1, 38, 736, 1, 18, 18615.00, 930.75, 17684.25, 186.15});
     TestFile("tests/fixtures/105. 2025.ods",
              Expectations{1770, 7, 2, 44, 385, 0, 16, 6041.95, 20381.95, 18615.00, 186.15});
+    TestFormatReader("tests/fixtures/105. 2026.xlsx", 1639);
+    TestFormatReader("tests/fixtures/105. 2026.xml", 1639);
 
     if (failures == 0) {
         std::cout << "test_parser: OK\n";

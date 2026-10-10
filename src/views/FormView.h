@@ -4,6 +4,7 @@
 #include "../Database.h"
 
 #include <string>
+#include <unordered_map>
 #include <vector>
 
 class FormView : public BaseView {
@@ -16,6 +17,13 @@ private:
     int runIndex = -1;
     std::vector<ItemRecord> items;
     std::vector<std::string> subcodes;
+    std::vector<Category> categories;
+    std::unordered_map<std::string, ImVec4> categoryColor;
+    int64_t selectedId = 0;
+    float listWidth = 700.0f;
+
+    void RenderDetails(const ItemRecord& rec);
+    void ReapplyRules();
 
     std::string search;
     std::string subFilter;

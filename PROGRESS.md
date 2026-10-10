@@ -60,10 +60,319 @@ regex-анализом; при корректном разборе merged-cells 
 - `tests/test_parser.cpp` проверяет round-trip: импорт в SQLite и чтение обратно (1770 позиций, остаток сходится).
 - Проверка: `cmake --build build -j4 && ./build/test_parser && ./build/test_db` → оба `OK`.
 
+## Этап 5 — Правила MVP (готов, тесты проходят)
+
+- `src/domain/RulesEngine.{h,cpp}`: типы `structural/exact/synonym/term/regex`, порядок применения
+  structural → exact → synonym → term → regex; `ApplyRules(runId)` пересчитывает отметки.
+- `src/views/RulesView.{h,cpp}`: одна форма с вкладками «Правила / Категории / Термины / Сводка / Очередь»
+  (CRUD правил, категорий, терминов; сводка по прогону; очередь нераспознанных + частотные кандидаты в термины).
+- `src/views/ReportView.{h,cpp}`: сводка по категориям/субсчётам, реестр помеченных (топ-50), экспорт CSV и HTML,
+  печать через `lp`, открытие в браузере.
+- `tests/test_rules.cpp` — **проходит**: структурные/терминовые/синонимные/regex правила, пороги, дубликаты.
+- `tests/test_views.cpp` — проверяет lifecycle окон (создание/закрытие/Ctrl+W) и рендер RulesView/ReportView/RunsView.
+
+## Этап 6 — Примечания (готов)
+
+- CRUD примечаний в `Database` (`AddNote/UpdateNote/DeleteNote/ListNotes/CountRunNotes`);
+  форма позиции в `FormView` показывает правила, арифметику и примечания аудитора
+  (накладная №, дата, договор, дата закупки, автор).
+
+## Этап 9 — Реестр прогонов (готов)
+
+- `src/views/RunsView.{h,cpp}`: реестр прогонов с фильтрами (учреждение, период/год, примечание,
+  «последние 30 дней»), таблица (файл, формат, учреждение, период, дата импорта, позиции, отмечено),
+  действия: открыть форму, удалить прогон, резервная копия, импорт.
+- Меню упрощено: одна запись = одно окно (убраны дубли «Справочники»/вкладки Правил).
+- `tests/test_views.cpp` проверяет, что RunsView открывается и рендерится.
+
+## Этап 10 — Сравнение прогонов (готов, тесты проходят)
+
+- `src/Database.{h,cpp}`: `CompareRuns(runA, runB)` → `CompareResult`. Сопоставление позиций
+  **только по нормализованному названию** (`name_norm`), без объединения данных: для каждого
+  нормализованного имени агрегируются остатки и суммы отметок по каждому прогону отдельно.
+  В `CompareResult`: `both/onlyA/onlyB/changed`, суммы остатков `sumA/sumB`, отмеченные
+  `flaggedA/flaggedB` и их количества, строки отсортированы по убыванию |Δ остатка|.
+- `src/views/CompareView.{h,cpp}`: выбор двух прогонов (A базовый / B сравнение), поиск по
+  названию, фильтр «только изменившиеся», таблица «Остаток A / Остаток B / Δ / отмечено A/B»
+  с цветовой подсветкой динамики, экспорт CSV и HTML, открытие в браузере.
+- Меню: «Отчёты → Сравнение прогонов».
+- `tests/test_db.cpp` проверяет `CompareRuns`: общее имя, только в B, изменившийся остаток,
+  суммы отметок по прогонам, сортировка по Δ.
+- Проверка: `cmake --build build -j4 && ./build/test_db && ./build/test_parser && ./build/test_rules && ./build/test_views` → все `OK`.
+
+## Этап 11 — XlsxReader и XmlReader (готов, тесты проходят)
+
+- `src/domain/Zip.{h,cpp}` — общие ZIP-хелперы (central directory, inflate) для ODS/XLSX.
+- `src/domain/XlsxReader.{h,cpp}`: `ReadXlsx` — sharedStrings, лист `xl/worksheets/sheet1.xml`,
+  типы ячеек `s/n/inlineStr/b`, абсолютные колонки из `r="A1"`, merged-ячейки (`mergeCells`) задают span.
+- `src/domain/XmlReader.{h,cpp}`: `ReadXml` — два варианта: SpreadsheetML 2003 (`Worksheet/Row/Cell/Data`,
+  `ss:Index`, `ss:MergeAcross`) и Flat-ODS (`table:table-row`/`table:table-cell`, как в content.xml).
+- `ImportView` теперь выбирает читатель по `DetectFormat` (ODS/XLSX/XML; XLS → конвертация через soffice).
+- `tests/test_parser.cpp` читает `105. 2026.xlsx` и `105. 2026.xml` (сгенерированы из ODS через LibreOffice)
+  и проверяет 1639 позиций и 0 арифметических сбоев — совпадает с ODS.
+- Проверка: `cmake --build build -j4 && ./build/test_parser && ./build/test_db && ./build/test_rules && ./build/test_views` → все `OK`.
+
+## Этап 12 — Сравнение по субсчётам и правилам (готов, тесты проходят)
+
+- `src/Database.{h,cpp}`: `CompareSubaccounts(runA, runB)` → агрегация по коду субсчёта
+  (остаток A/B, отмеченная сумма A/B, число позиций и отметок); `CompareRules(runA, runB)` →
+  агрегация по `rule_code` (сумма и количество отметок в каждом прогоне, категория).
+- `src/views/CompareView.{h,cpp}`: три вкладки — «Позиции» (по нормализованному названию),
+  «Субсчёты» (динамика остатков и отмеченных сумм по 105.xx), «Правила» (динамика сумм по правилам).
+- `tests/test_db.cpp` проверяет `CompareSubaccounts` и `CompareRules` (остатки, суммы отметок,
+  количества позиций/отметок по прогонам).
+- Проверка: `cmake --build build -j4 && ./build/test_db && ./build/test_parser && ./build/test_rules && ./build/test_views` → все `OK`.
+
+## Этап 13 — Пакет справочников (готов, тесты проходят)
+
+- `src/Database.{h,cpp}`: `ExportDictionaryPackage(path)` — JSON с категориями, правилами и
+  терминами; `ImportDictionaryPackage(path, stats)` — upsert по `name`/`code`, термины по
+  `term_norm+scope`. Импорт не перезаписывает термины с `origin='manual'`: вместо этого создаётся
+  запись в `conflicts`. Минимальный JSON-парсер внутри `Database.cpp` (без внешних зависимостей).
+- `src/views/SettingsView.{h,cpp}`: кнопки «Экспорт пакета» (в `~/.audit105/refs_bundle_*.json`)
+  и «Импорт пакета» (файловый диалог `.json`), вывод статистики импорта.
+- `tests/test_db.cpp`: экспорт → импорт в вторую базу (новая база содержит seed, поэтому
+  категории обновляются, новое правило добавляется), повторный импорт не дублирует,
+  ручной термин не перезаписывается (конфликт).
+- Проверка: `cmake --build build -j4 && ./build/test_db && ./build/test_parser && ./build/test_rules && ./build/test_views` → все `OK`.
+
+## Этап 14 — Формы справочников правил (единый шаблон)
+
+- Общий шаблон для `TermsEditorView` («Термины и списки»), `RulesEditorView` («Правила») и
+  `CategoriesEditorView` («Категории»): слева — панель управления над таблицей
+  («Добавить», «Удалить», «Пред.», «След.», «Сбросить» + строка выбора), справа — только
+  редактор полей с кнопкой «Сохранить».
+- «Добавить» создаёт запись сразу в базе с авто-ID и provisional-значениями
+  (`Database::CreateBlankRule/Term/Category`), таблица обновляется, новая строка подсвечена
+  зелёным и выбрана — пользователь дозаполняет поля и сохраняет.
+- `TermsEditorView`: блок «Списки терминов» (группировка по правилу + перечню, счётчики),
+  фильтр по перечню, пакетное добавление терминов (текст построчно/через запятую,
+  `AddTermsToList` с пропуском дубликатов), колонки «Перечень» и «Дата».
+- `RulesEditorView`: для правил типа `term` в редакторе показывается список терминов правила;
+  `CategoriesEditorView`: число правил в категории в таблице и в редакторе.
+- `tests/test_db.cpp`: проверка `CreateBlank*`, `AddTermsToList`, `ListTermLists`, `CountRuleTerms`.
+- Между таблицей и редактором — перемещаемый вертикальный слайдер (`VerticalSplitter`,
+  ширина левой панели хранится в `listWidth`); у `ComboWithFilter` убрана кнопка «Выбрать…»
+  (попоп открывается кликом по текущему значению).
+- Проверка: `cmake --build build -j4 && ./build/test_db && ./build/test_rules && ./build/test_views` → все `OK`.
+
+## Этап 15 — «Добавить копированием» в форме правил
+
+- `RulesEditorView`: в панели управления появилась кнопка «Добавить копированием»
+  (`DuplicateDraft`) — дублирует выбранную запись (код + суффикс «-копия», категория, тип,
+  шаблон, основание, источник, серьёзность, флаг активности) и выбирает копию.
+  Список терминов правила-`term` не копируется (уникальный индекс `term_norm+scope`).
+- `Database::DuplicateRule(id)` + `Database::GetRule(id, out)`; `UniqueRuleCode/UniqueCategoryName/
+  UniqueTermName` подбирают свободные значения обязательных полей, `FallbackCategoryName`
+  создаёт категорию «Черновик», если указанной категории нет.
+- Обязательные поля при создании всегда заполнены заглушками: `CreateBlankRule`
+  (`новый-<id>`, категория, тип `term`), `CreateBlankTerm` (`новый термин <id>`),
+  `CreateBlankCategory` (`Новая категория <id>`); пустой `rule_code` термина теперь
+  пишется как NULL (иначе FK `terms.rule_code → rules(code)` блокировал добавление).
+- `tests/test_db.cpp`: копирование правила, суффикс «-копия», уникальность кода при
+  совпадении, создание пустого правила с неизвестной категорией, термин без правила.
+  `tests/test_views.cpp`: `DuplicateDraft()` через открытую форму.
+- Проверка: `cmake --build build -j4 && ./build/test_db && ./build/test_parser && ./build/test_rules && ./build/test_views` → все `OK`.
+
+## Этап 16 — подтверждение критичных операций
+
+- `ConfirmationModal` был сломан: он открывал обычное окно (`ImGui::Begin`), которое
+  висело на экране постоянно, а «Удалить» срабатывало только кликом по этому окну,
+  а не по кнопке в панели. Теперь это настоящий `ImGui::BeginPopupModal`:
+  окно появляется только после `ImGui::OpenPopup`, закрывается по «Отмена», Esc
+  или после подтверждения; ширина фиксирована через `Dummy(320, 0)`.
+- Схема во всех вьюерах: клик по кнопке → `OpenPopup(id)` → в том же кадре
+  `ConfirmationModal(id, …)`; удаление выполняется только если подтвердили.
+  Критичные операции: удаление правила, термина, категории, прогона, примечания.
+- `RulesEditorView::DeleteSelected`, `TermsEditorView::DeleteSelected`,
+  `CategoriesEditorView::DeleteSelected` теперь сами рисуют кнопку «Удалить»
+  (без выбранной записи — сообщение об ошибке), текст подтверждения содержит
+  название записи и предупреждение «Отменить это нельзя».
+- `tests/test_views.cpp`: проверка, что без клика попап не открыт и ничего не удалено,
+  что модалка открывается и имеет нормальный размер, что клик по «Удалить»
+  подтверждает операцию, а после подтверждения модалка закрыта.
+- Проверка: `cmake --build build -j4 && ./build/test_db && ./build/test_parser && ./build/test_rules && ./build/test_views` → все `OK`.
+
+## Этап 17 — «Добавить копированием» в категориях, терминах и списках
+
+- `Database::DuplicateCategory` / `DuplicateTerm` / `DuplicateTermList` (и
+  `GetCategory` / `GetTerm` для чтения копии). Имена копий: `«… (копия)»`,
+  при конфликте — `«… (копия) 2»` (`UniqueCategoryName`, `UniqueTermName`,
+  новый `UniqueListName`).
+- Кнопка `ICON_FA_COPY "  Добавить копированием"` добавлена в toolbar
+  `CategoriesEditorView` и `TermsEditorView`; в разделе «Списки терминов» —
+  кнопка «Скопировать список», которая копирует выбранный перечень вместе
+  с его терминами (новое имя `«Перечень (копия)»`).
+- Миграция схемы: уникальный индекс `idx_terms_norm` стал мягче —
+  `(term_norm, scope, COALESCE(list_name,''))`, чтобы один и тот же термин
+  мог жить в нескольких перечнях одного scope. `AddTermsToList` теперь
+  проверяет дубликаты в рамках конкретного перечня.
+- `DuplicateSelectedList` требует выбранный перечень (клик по строке таблицы
+  списков); `SelectList(ruleCode, listName)` фиксирует правило и перечень.
+- `tests/test_db.cpp`: копирование категории/термина/списка, суффикс «(копия)»,
+  уникальность имён при повторном копировании, удаление копий.
+  `tests/test_views.cpp`: `DuplicateDraft()` в формах категорий и терминов,
+  `DuplicateSelectedList()` для списка.
+- Проверка: `cmake --build build -j4 && ./build/test_db && ./build/test_parser && ./build/test_rules && ./build/test_views` → все `OK`.
+
+## Этап 18 — переименование категории (FK `rules.category`)
+
+- Причина ошибки «Не удалось обновить категорию»: `rules.category` ссылается на
+  `categories(name)`, поэтому переименование категории, у которой есть правила,
+  нарушало FOREIGN KEY (и до, и после `UPDATE`). То же касалось удаления категории
+  с правилами.
+- `UpdateCategory` теперь в одной транзакции переносит правила на новое имя и
+  меняет название категории; контроль FK временно отключается (`PRAGMA
+  foreign_keys=OFF`), так внутри транзакции он не работает.
+- `DeleteCategory` переносит правила категории в другую (или создаёт «Черновик»)
+  перед удалением — раньше удаление категории с правилами падало по FK.
+- `Begin/Commit/Rollback` сделаны вложенными (счётчик транзакций), иначе
+  `ImportDictionaryPackage` не мог вызвать `UpdateCategory` внутри своей
+  транзакции.
+- `CategoriesEditorView::SaveDraft` заранее проверяет, что название не занято,
+  и сообщает об этом явно; текст подтверждения удаления теперь говорит,
+  сколько правил будет перенесено.
+- `tests/test_db.cpp`: временная категория с правилом — переименование,
+  попытка занять существующее имя (откат), удаление категории и перенос правил.
+- Проверка: `cmake --build build -j4 && ./build/test_db && ./build/test_parser && ./build/test_rules && ./build/test_views` → все `OK`.
+
+## Этап 19 — связи только по ID
+
+- Все связи в базе теперь по ID: `rules.category_id`, `terms.rule_id`,
+  `flags.rule_id`, `items.rule_id`, `items.category_id`. Имена и коды
+  (`categories.name`, `rules.code`) используются только для отображения.
+- `MigrateToIdRelations()` в `src/Database.cpp` определяет старые колонки
+  (`rules.category`, `terms.rule_code`, `flags.rule_code`, `items.rule_code`),
+  перестраивает таблицы через `*_new`, переносит связи по имени/коду, создаёт
+  категорию-подмену и удаляет флаги без правила.
+- `SeedExampleRules` вставляет категории, читает их ID, затем правила с
+  `category_id` и термины с `rule_id`.
+- API `src/Database.h`: `CreateBlankRule(int64_t categoryId)`,
+  `CreateBlankTerm(int64_t ruleId, ...)`, `CountRuleTerms(int64_t ruleId)`,
+  `AddTermsToList(int64_t ruleId, ...)`, `DuplicateTermList(int64_t ruleId, ...)`,
+  `InsertFlag(itemId, ruleId, severity, amount, rationale)`.
+- `UpdateCategory` — простой `UPDATE ... WHERE id=?`; конфликт уникальности
+  имени возвращает `false`. `DeleteCategory` переносит правила и позиции в
+  категорию-подмену по ID.
+- `RulesEditorView` фильтрует и создаёт правила по `categoryFilterId`/`categoryId`;
+  `TermsEditorView` — по `ruleFilterId`/`selectedListRuleId`.
+- Экспорт словаря сохраняет имена/коды для переносимости, импорт маппит их в ID.
+- `tests/test_db.cpp`, `tests/test_rules.cpp`, `tests/test_views.cpp` переведены
+  на ID-связи.
+- Проверка: `cmake --build build -j4 && ./build/test_db && ./build/test_parser && ./build/test_rules && ./build/test_views` → все `OK`.
+
+## Этап 20 — серая категория для «без оборота»
+
+- Добавлена примерная категория «Без оборота» с цветом `#9AA0A6` (серый,
+  незаметный); правило `S05` (`no_turnover`) переведено в неё.
+- `EnsureSeedCategories()` идемпотентно добавляет недостающие примерные
+  категории в уже существующую базу и переносит `S05` в серую категорию.
+- Позиция окрашивается по категории правила с наибольшей серьёзностью, поэтому
+  «без оборота» (серый) виден только когда других критериев нет.
+- `tests/test_db.cpp`: 5 примерных категорий, проверка цвета `S05`.
+- Проверка: `cmake --build build -j4 && ./build/test_db && ./build/test_parser && ./build/test_rules && ./build/test_views` → все `OK`.
+
+## Этап 21 — правки примерных правил субсчётов
+
+- Удалено правило `SUB02` («перчатки, шприц, игла, бинт, катетер, система
+  инфузионная на 105.31 — неверный субсчёт»): медматериалы действительно ведутся
+  на 105.31. `EnsureSeedExamples()` удаляет это правило и в уже созданных базах
+  (только если это исходный примерный шаблон).
+- Добавлено правило `SUB03`: `sub:105.36;реагент, реактив, ивд, питательная
+  среда, агар, тест-система, набор` — реагенты и ИВД должны быть на 105.31,
+  а не на 105.36.
+- `tests/test_rules.cpp`: медматериалы на 105.31 не флагуются, реагенты на
+  105.36 флагуются. `tests/test_db.cpp`: позиция «Аланинаминотрансфераза (АЛТ)
+  ИВД, набор реагентов» на 105.36 флагуются `SUB03`.
+- Проверка: `cmake --build build -j4 && ./build/test_db && ./build/test_parser && ./build/test_rules && ./build/test_views` → все `OK`.
+
+## Этап 22 — комбобоксы в терминах и пояснение шаблона в форме правил
+
+- Перечислимые поля формы «Термины» (Scope, Origin, Перечень) и формы «Правила»
+  (Тип, Серьёзность, Проверка для structural, Признак дубликата для exact)
+  выбираются через `ComboEnum` (`src/Widgets.cpp`); значение вне списка
+  подсвечивается подсказкой «не из списка».
+- Таблица ключевых слов перенесена в движок: `KeywordHelpFor(type)` в
+  `src/domain/RulesEngine.h/.cpp` (`KeywordHelp{name, logic, example, keyword}`).
+- В форме «Правила» блок «Пояснение к шаблону» больше не сворачиваемый: он
+  рисуется сразу под полями «Субсчёты (sub:)» и телом правила — таблица
+  «ключевое слово / логика / пример / вставить», разбор текущего шаблона и
+  живая проверка тела (пустое тело, неизвестное ключевое слово, неверное
+  регулярное выражение). Кнопка в таблице подставляет ключевое слово в тело.
+- `tests/test_rules.cpp`: для каждого типа есть пояснение, каждое ключевое слово
+  structural/exact документировано, шаблон не теряется при
+  `ParseRulePattern` → `BuildRulePattern`.
+- Проверка: `cmake --build build -j4 && ./build/test_db && ./build/test_parser && ./build/test_rules && ./build/test_views` → все `OK`.
+
+## Этап 23 — авто-переприменение правил после правок
+
+- `src/App.{h,cpp}`: `MarkRulesChanged()` (счётчик `rulesVersion`),
+  `RunRulesVersion(runId)`, `RulesOutOfDate(runId)`, `ReapplyRules(runId)`
+  (пересчитывает отметки и обновляет все открытые формы),
+  `MarkRunRulesApplied(runId)` — отметка «правила применены» сразу после импорта.
+- Правки в «Правилах», «Терминах» и «Категориях» (сохранение, добавление,
+  копирование, удаление, пакетная загрузка терминов, примеры правил) помечают
+  правила изменёнными.
+- `FormView`, `RulesView`, `ReportView`, `CompareView`: при рендере, если
+  отметки прогона старше текущих правил, правила переприменяются автоматически
+  (с предупреждением); в `FormView` и `RulesView` есть кнопка «Обновить
+  отметки» / «Переприменить правила» для ручного обновления.
+- `FormView::RefreshData()` сохраняет выбранную позицию при пересчёте.
+- `tests/test_views.cpp`: новый прогон не считается устаревшим; после
+  `MarkRulesChanged()` форма сама переприменяет правила и позиция получает
+  отметку нового правила.
+- Проверка: `cmake --build build -j4 && ./build/test_db && ./build/test_parser && ./build/test_rules && ./build/test_views` → все `OK`.
+
+## Этап 24 — перечень терминов можно задать вручную
+
+- `Перечень` (`terms.list_name`) — это группировка терминов внутри правила, а не
+  признак импорта: движок правил (`EvaluateRules`) использует только `rule_id`,
+  перечень нужен для фильтров, таблицы «Списки терминов», пакетного добавления,
+  копирования списков и уникальности `term_norm + scope + list_name`.
+- В форме термина (`src/views/TermsEditorView.cpp`) рядом с комбоксом существующих
+  перечней правила появилась кнопка «+ новый перечень» с полем названия — раньше
+  название можно было выбрать только из уже существующих списков (свободный ввод
+  был только в пакетном добавлении).
+- `SaveDraft()` обрезает название перечня пробелами.
+- Проверка: `cmake --build build -j4 && ./build/test_db && ./build/test_parser && ./build/test_rules && ./build/test_views` → все `OK`.
+
+## Этап 25 — справочник перечней вместо «видов перечней»
+
+- Справочник `list_kinds` и колонка `terms.list_kind_id` удалены: миграция
+  `MigrateTermLists()` в `EnsureSchema` создаёт `term_lists`, переносит в неё
+  пары `(rule_id, list_name)` из `terms` (источник и дата — из первого термина),
+  пересоздаёт `terms` без `list_kind_id`, удаляет `list_kinds` и индекс
+  `idx_terms_kind`. Идемпотентно: повторный запуск ничего не ломает.
+- `src/Database.{h,cpp}`: `TermList` = `id, ruleId, ruleCode, name, description,
+  sourceDoc, asOfDate, active, sortOrder, termCount, activeTermCount`;
+  `ListTermLists`, `GetTermList`, `AddTermList`, `UpdateTermList` (при смене
+  имени переносит `terms.list_name`), `DeleteTermList` (удаляет и термины),
+  `CreateBlankList`, `DuplicateTermListById`, `EnsureTermList`,
+  `AddTermsToList`, `TableExists` (для тестов). Удалены `ListKind`,
+  `SeedListKinds`, `ListListKinds`, `AddListKind`, `UpdateListKind`,
+  `DeleteListKind`, `GetListKind`, `CreateBlankListKind`, `DuplicateListKind`,
+  `FindListKindByName`, `CountListsOfKind`, `CountTermsOfKind`, `SetListKind`.
+- Новая форма `src/views/ListsEditorView.{h,cpp}` («Правила → Перечни»):
+  фильтры (поиск, правило, только активные), таблица (ID, название, правило,
+  описание, источник, дата, терминов, активен), toolbar (добавить,
+  копировать, удалить, пред/след), форма (название, правило, описание,
+  источник, дата, порядок, активность), блок пакетного добавления терминов
+  (текст построчно/через запятую + источник и дата) и переход в форму «Термины».
+- `TermsEditorView`: убраны панель «Виды перечней», фильтр по виду, колонка
+  «Вид», групповое назначение вида и поля вида в форме термина; выбор перечня
+  и групповые операции сохранены.
+- Пакет справочников (`ExportDictionaryPackage`/`ImportDictionaryPackage`)
+  содержит перечни; отчёт (`Report`) считает `Перечней`.
+- Тесты: `test_db` — создание/переименование/дублирование/удаление перечня,
+  авто-создание перечня при добавлении термина, количество терминов,
+  миграция legacy-базы с `list_kinds` (таблица удалена, источник и дата
+  перенесены); `test_views` — `ListsEditorView` открывается, рендерится
+  (`lists_list`/`lists_form`) и копирует перечень вместе с терминами.
+- Проверка: `cmake --build build -j4 && ./build/test_db && ./build/test_parser && ./build/test_rules && ./build/test_views` → все `OK`.
+
 ## Следующие шаги
-1. Этап 5: правила MVP (structural: арифметика/без «Кол.»/отрицательные остатки; exact: дубликаты) + сводка.
-2. XlsxReader (тот же GridModel), XmlReader.
-3. Smoke-test GUI (нужен дисплей; `xvfb-run` отсутствует).
+1. Smoke-test GUI (нужен дисплей; `xvfb-run` отсутствует).
+2. Этап 11 (опционально): импорт федеральных справочников, размеченный ODS, PDF.
 
 ## Команды
 ```

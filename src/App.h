@@ -3,6 +3,7 @@
 #include "imgui.h"
 #include <memory>
 #include <string>
+#include <unordered_map>
 #include <vector>
 
 #include "Database.h"
@@ -65,6 +66,13 @@ public:
     void SetStatus(const std::string& text);
     void ShowError(const std::string& message);
 
+    void MarkRulesChanged();
+    int RulesVersion() const { return rulesVersion; }
+    int RunRulesVersion(int64_t runId) const;
+    bool RulesOutOfDate(int64_t runId) const;
+    int ReapplyRules(int64_t runId);
+    void MarkRunRulesApplied(int64_t runId);
+
     std::vector<std::unique_ptr<BaseView>> views;
     std::vector<std::string> recentDbPaths;
     std::string lastDbPath;
@@ -88,5 +96,7 @@ private:
     std::string dbPath;
     std::string statusLine;
     std::string errorMessage;
+    int rulesVersion = 0;
+    std::unordered_map<int64_t, int> runRulesVersion;
     int viewIdCounter = 0;
 };

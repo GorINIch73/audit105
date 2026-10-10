@@ -388,3 +388,79 @@ local,Наркология,налфубин,"Локальный перечень
 4. Нужен ли контроль устаревания справочника (предупреждение, если `as_of_date` старше N месяцев)?
 5. Нужен **образец XML-выгрузки** из 1С и, если возможно, образец `.xls` — без них точный парсер этих форматов не написать.
 6. Период — свободный текст; фильтр «по году» делать по подстроке или добавить отдельное числовое поле `year` для точной фильтрации?
+
+---
+
+## 13. Этап 12 — Справочник перечней вместо «видов перечней»
+
+### Зачем
+«Вид перечня» (`list_kinds`) — отдельная сущность, которая ни на что не влияет: она только
+метит термины, но перечни при этом остаются группировкой строк `terms.list_name`.
+Аудитору нужна **форма редактирования перечней** как самостоятельных справочников:
+название, правило, описание, источник, дата актуальности, активность, число терминов.
+Поэтому справочник видов удаляется, а перечни становятся отдельной таблицей.
+
+### Схема
+```sql
+CREATE TABLE IF NOT EXISTS term_lists(
+  id INTEGER PRIMARY KEY,
+  rule_id INTEGER REFERENCES rules(id) ON DELETE CASCADE,
+  name TEXT NOT NULL,
+  description TEXT,
+  source_doc TEXT,
+  as_of_date TEXT,
+  active INTEGER DEFAULT 1,
+  sort_order INTEGER DEFAULT 0,
+  created_at TEXT,
+  updated_at TEXT,
+  UNIQUE(rule_id, name)
+);
+```
+- Термины продолжают ссылаться на перечень через `(rule_id, list_name)` — миграции `terms`
+  не требуется, кроме удаления колонки `list_kind_id`.
+- Таблица `list_kinds` удаляется.
+
+### Миграция (в `EnsureSchema`, идемпотентно)
+1. Создать `term_lists`, если нет.
+2. Если `list_kinds` существует:
+   - для каждой пары `(rule_id, list_name)` из `terms` вставить строку `term_lists`
+     (источник/дата — из первого термина перечня);
+   - удалить колонку `terms.list_kind_id` (через пересоздание таблицы, как в существующих миграциях);
+   - удалить таблицу `list_kinds`.
+3. Убрать индекс `idx_terms_kind`.
+
+### API `Database`
+Удалить: `ListKind`, `SeedListKinds`, `ListListKinds`, `AddListKind`, `UpdateListKind`,
+`DeleteListKind`, `GetListKind`, `CreateBlankListKind`, `DuplicateListKind`,
+`FindListKindByName`, `CountListsOfKind`, `CountTermsOfKind`, `SetListKind`,
+поля `listKindId`/`listKind` у `Term`.
+
+Добавить:
+- `TermList` → `id, ruleId, ruleCode, name, description, sourceDoc, asOfDate, active, sortOrder, termCount, activeTermCount`.
+- `ListTermLists()` — перечни из `term_lists` с количеством терминов (включая пустые).
+- `GetTermList(int64_t id, TermList& out)`.
+- `AddTermList(TermList&)` / `UpdateTermList(TermList&)` — при смене имени обновляет `terms.list_name`.
+- `DeleteTermList(int64_t id)` — удаляет перечень и его термины.
+- `CreateBlankList(int64_t ruleId)` — пустой перечень.
+- `DuplicateTermList(int64_t id, int& copied)` — копия перечня с терминами.
+- `EnsureTermList(int64_t ruleId, const std::string& name)` — авто-создание строки `term_lists`
+  при добавлении термина с новым именем.
+
+### UI
+- Новая форма `src/views/ListsEditorView.{h,cpp}` («Перечни»), пункт меню «Правила → Перечни»:
+  - таблица перечней: название, правило, описание, источник, дата, терминов, активен;
+  - фильтры: поиск, правило, только активные;
+  - toolbar: добавить, копировать, удалить отмеченные, пред/след;
+  - форма: название, правило, описание, источник, дата, активность;
+  - блок «добавить термины в перечень»: текст построчно + источник/дата.
+- `TermsEditorView`: убрать панель «Виды перечней», фильтр по виду, колонку «Вид»,
+  групповое назначение вида; оставить выбор перечня и групповые удаления.
+- Пакет справочников (`ExportDictionaryPackage`/`ImportDictionaryPackage`) включает перечни.
+
+### Тесты
+- `test_db`: создание/переименование/дублирование/удаление перечня, авто-создание при добавлении
+  термина, количество терминов, отсутствие `list_kinds` после миграции.
+- `test_views`: `ListsEditorView` создаётся и рендерится без ошибок.
+
+### Критерий готовности
+Сборка и все тесты проходят; в UI нет «Вид перечня»; перечни редактируются в отдельной форме.

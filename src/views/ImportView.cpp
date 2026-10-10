@@ -8,6 +8,8 @@
 #include "../Widgets.h"
 #include "../domain/FormatDetector.h"
 #include "../domain/OdsReader.h"
+#include "../domain/XlsxReader.h"
+#include "../domain/XmlReader.h"
 
 #include <cctype>
 #include <cstdlib>
@@ -49,6 +51,15 @@ bool ConvertWithSoffice(const std::string& path, std::string& outPath) {
     return std::filesystem::exists(outPath);
 }
 
+bool ReadSpreadsheet(const std::string& path, InputFormat format, Spreadsheet& sheet,
+                     std::string& error) {
+    switch (format) {
+        case InputFormat::Xlsx: return ReadXlsx(path, sheet, error);
+        case InputFormat::Xml: return ReadXml(path, sheet, error);
+        default: return ReadOds(path, sheet, error);
+    }
+}
+
 }  // namespace
 
 void ImportView::RefreshData() {
@@ -59,8 +70,6 @@ void ImportView::Render() {
     if (!app) return;
 
     if (BeginWindow()) {
-        RenderCloseBar();
-
         if (!app->HasDatabase()) {
             ImGui::TextDisabled("Сначала создайте или откройте базу (Файл → Создать/Открыть).");
             EndWindow();
@@ -111,12 +120,13 @@ void ImportView::Render() {
 
             if (lastError.empty()) {
                 Spreadsheet sheet;
-                if (!ReadOds(effectivePath, sheet, lastError)) {
+                InputFormat readFormat = DetectFormat(effectivePath);
+                if (!ReadSpreadsheet(effectivePath, readFormat, sheet, lastError)) {
                     parsed = false;
                 } else {
                     report = ParsePositions(sheet);
                     sheetName = sheet.sheetName;
-                    formatName = FormatName(DetectFormat(effectivePath));
+                    formatName = FormatName(readFormat);
                     parsed = true;
                     if (period.empty()) period = GuessPeriod(std::filesystem::path(path).filename().string());
                 }
@@ -144,7 +154,8 @@ void ImportView::Render() {
         ImGui::Text("Остаток на конец: %s", FormatAmount(report.closingTotal).c_str());
 
         ImGui::Separator();
-        if (ImGui::BeginTable("subs", 6, ImGuiTableFlags_RowBg | ImGuiTableFlags_BordersInnerV)) {
+        if (ImGui::BeginTable("subs", 7, ImGuiTableFlags_RowBg | ImGuiTableFlags_BordersInnerV)) {
+            ImGui::TableSetupColumn("ID");
             ImGui::TableSetupColumn("Субсчёт");
             ImGui::TableSetupColumn("Откр.");
             ImGui::TableSetupColumn("Дебет");
@@ -152,8 +163,12 @@ void ImportView::Render() {
             ImGui::TableSetupColumn("Закр.");
             ImGui::TableSetupColumn("Арифм.");
             ImGui::TableHeadersRow();
+            int rowId = 1;
             for (const Subaccount& sub : report.subaccounts) {
                 ImGui::TableNextRow();
+                ImGui::PushID(rowId);
+                ImGui::TableNextColumn();
+                ImGui::Text("%d", rowId);
                 ImGui::TableNextColumn();
                 ImGui::Text("%s%s", sub.code.c_str(), sub.isTotal ? " (итого)" : "");
                 ImGui::TableNextColumn();
@@ -166,6 +181,8 @@ void ImportView::Render() {
                 ImGui::Text("%s", FormatAmount(sub.closing).c_str());
                 ImGui::TableNextColumn();
                 ImGui::Text(sub.arithOk ? "ok" : "сбой");
+                ImGui::PopID();
+                ++rowId;
             }
             ImGui::EndTable();
         }
@@ -195,7 +212,9 @@ void ImportView::Render() {
             run.account = account;
             run.kfo = kfo;
 
-            if (app->Db().ImportRun(run, report) != 0) {
+            int64_t runId = app->Db().ImportRun(run, report);
+            if (runId != 0) {
+                app->MarkRunRulesApplied(runId);
                 app->SetStatus("Импортировано позиций: " + std::to_string(report.items.size()));
                 ImGui::TextColored(ImVec4(0.4f, 1.0f, 0.5f, 1.0f), "Импорт завершён.");
             } else {
