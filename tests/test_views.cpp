@@ -505,6 +505,50 @@ int main() {
     }
     printf("ok: rule changes re-apply flags automatically in the form\n");
 
+    // 8а) фильтр строк по правилу в Форме МЗ
+    Item secondItem;
+    secondItem.rowNo = 2;
+    secondItem.nameRaw = "Бинт стерильный";
+    secondItem.nameNorm = "бинт стерильный";
+    secondItem.subaccount = "105.31";
+    secondItem.closeDebit = 50.0;
+    secondItem.qtyClose = 2.0;
+    app.Db().InsertItem(probeRun, probeSub, secondItem);
+
+    formView->RefreshData();
+    formView->SetRuleFilter("PROBE01");
+    Frame(app);
+    if (formView->ShownRows() != 1) {
+        printf("fail: rule filter kept %d rows instead of 1\n", formView->ShownRows());
+        return 1;
+    }
+    formView->SetRuleFilter("S02");
+    Frame(app);
+    if (formView->ShownRows() != 1) {
+        printf("fail: rule S02 filter kept %d rows instead of 1\n", formView->ShownRows());
+        return 1;
+    }
+    formView->SelectRules({"PROBE01", "S02"});
+    Frame(app);
+    if (formView->ShownRows() != 1) {
+        printf("fail: multi-rule filter kept %d rows instead of 1\n", formView->ShownRows());
+        return 1;
+    }
+    formView->SelectRules({});
+    Frame(app);
+    if (formView->ShownRows() != 2) {
+        printf("fail: clearing the rule filter left %d rows instead of 2\n", formView->ShownRows());
+        return 1;
+    }
+    formView->SelectRules({"PROBE99"});
+    Frame(app);
+    if (formView->ShownRows() != 0) {
+        printf("fail: unknown rule still matched rows in the form\n");
+        return 1;
+    }
+    formView->SelectRules({});
+    printf("ok: the form filters rows by rule\n");
+
     RunsView* runs = app.CreateView<RunsView>("Реестр прогонов");
     runs->RefreshData();
     for (int i = 0; i < 2; ++i) Frame(app);

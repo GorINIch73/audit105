@@ -122,7 +122,8 @@ std::vector<ItemRecord> ReportView::FilteredRows() const {
     }
 
     std::unordered_set<int64_t> matchedItems;
-    if (!ruleCodes.empty()) {
+    const bool filterByRules = !ruleCodes.empty() && selected.size() < ruleCodes.size();
+    if (filterByRules) {
         for (const Flag& flag : flags) {
             if (selected.count(flag.ruleCode)) matchedItems.insert(flag.itemId);
         }
@@ -133,7 +134,7 @@ std::vector<ItemRecord> ReportView::FilteredRows() const {
     std::vector<ItemRecord> out;
     for (const ItemRecord& rec : items) {
         if (onlyFlagged && rec.ruleCode.empty()) continue;
-        if (!ruleCodes.empty() && !matchedItems.count(rec.id)) continue;
+        if (filterByRules && !matchedItems.count(rec.id)) continue;
         if (!categoryFilter.empty() && rec.category != categoryFilter) continue;
         if (!subFilter.empty() && !ContainsUtf8(rec.subaccount, subFilter)) continue;
         if (minSum > 0.0 && CloseBalance(rec) < minSum) continue;
