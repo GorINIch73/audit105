@@ -16,6 +16,7 @@ private:
     std::string sheetName;
     ParseReport report;
     bool parsed = false;
+    bool parseAttempted = false;
     std::string lastError;
 
     std::string organization;

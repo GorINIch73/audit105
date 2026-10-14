@@ -22,8 +22,6 @@ private:
     TermList draft;
 
     std::string search;
-    int64_t ruleFilterId = 0;
-    bool activeOnly = false;
 
     std::string bulkText;
     std::string bulkSource;
@@ -42,11 +40,13 @@ private:
     void SaveDraft();
     void AddDraft();
     void DeleteSelected();
+    void DeleteFilteredLists();
     void AddTermsToDraft();
 
     std::vector<Term> DraftTerms() const;
 
     void RenderFilters();
+    void RenderBulkOperations();
     void RenderToolbar();
     void RenderTable();
     void RenderForm();

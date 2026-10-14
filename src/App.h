@@ -1,15 +1,32 @@
 #pragma once
 
+#define IMGUI_DEFINE_MATH_OPERATORS
+
 #include "imgui.h"
+#include <chrono>
 #include <memory>
 #include <string>
 #include <unordered_map>
 #include <vector>
 
 #include "Database.h"
+#include "ImGuiFileDialog.h"
 #include "views/BaseView.h"
 
 struct GLFWwindow;
+
+enum LogLevel {
+    LogInfo = 0,
+    LogWarn = 1,
+    LogError = 2,
+    LogSuccess = 3,
+};
+
+struct LogEntry {
+    std::string time;
+    std::string text;
+    int level = LogInfo;
+};
 
 class App {
 public:
@@ -22,6 +39,7 @@ public:
     void RenderMenuBar();
     void RenderViews();
     bool HasError() const { return !errorMessage.empty(); }
+
 
     template <typename T>
     T* CreateView(const std::string& title = "") {
@@ -66,6 +84,19 @@ public:
     void SetStatus(const std::string& text);
     void ShowError(const std::string& message);
 
+    void LogEvent(const std::string& text, int level = LogInfo);
+    const std::vector<LogEntry>& Events() const { return events; }
+    void ClearEvents();
+
+    void SetProgress(const std::string& text, double fraction = -1.0);
+    void ClearProgress();
+    bool HasProgress() const { return progressActive; }
+
+    void OpenFileDialog(const std::string& key, const std::string& title, const char* filters,
+                        const IGFD::FileDialogConfig& config = IGFD::FileDialogConfig{});
+    void ClaimDialog(const std::string& key);
+    void CloseStaleDialogs(const std::vector<std::string>& extraKeys);
+
     void MarkRulesChanged();
     int RulesVersion() const { return rulesVersion; }
     int RunRulesVersion(int64_t runId) const;
@@ -80,9 +111,11 @@ public:
 
     bool showAbout = false;
     bool isImporting = false;
+    bool showEventLog = false;
 
 private:
     void RenderStatusBar();
+    void RenderEventLog();
     void RenderErrorPopup();
 
     GLFWwindow* window = nullptr;
@@ -96,6 +129,12 @@ private:
     std::string dbPath;
     std::string statusLine;
     std::string errorMessage;
+    std::vector<LogEntry> events;
+    std::vector<std::string> claimedDialogs;
+    std::string progressText;
+    double progressValue = -1.0;
+    bool progressActive = false;
+    std::chrono::steady_clock::time_point progressStart;
     int rulesVersion = 0;
     std::unordered_map<int64_t, int> runRulesVersion;
     int viewIdCounter = 0;

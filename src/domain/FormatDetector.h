@@ -8,6 +8,7 @@ enum class InputFormat {
     Xlsx,
     Xml,
     Xls,
+    Csv,
 };
 
 InputFormat DetectFormat(const std::string& path);

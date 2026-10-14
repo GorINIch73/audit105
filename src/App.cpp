@@ -5,6 +5,8 @@
 
 #include <algorithm>
 #include <cstdio>
+#include <ctime>
+#include <chrono>
 
 #include "IconsFontAwesome6.h"
 #include "ImGuiFileDialog.h"
@@ -17,6 +19,7 @@
 #include "views/CategoriesEditorView.h"
 #include "views/TermsEditorView.h"
 #include "views/ListsEditorView.h"
+#include "views/RegistryImportView.h"
 #include "views/ReportView.h"
 #include "views/RunsView.h"
 #include "views/CompareView.h"
@@ -131,7 +134,79 @@ void App::AddRecentDb(const std::string& path) {
     SaveSession();
 }
 
-void App::SetStatus(const std::string& text) { statusLine = text; }
+void App::SetStatus(const std::string& text) {
+    statusLine = text;
+    LogEvent(text, LogInfo);
+}
+
+void App::LogEvent(const std::string& text, int level) {
+    if (text.empty()) return;
+    if (!events.empty() && events.back().text == text && events.back().level == level) return;
+
+    char stamp[16] = "";
+    std::time_t now = std::chrono::system_clock::to_time_t(std::chrono::system_clock::now());
+    std::strftime(stamp, sizeof(stamp), "%H:%M:%S", std::localtime(&now));
+
+    events.push_back(LogEntry{stamp, text, level});
+    if (events.size() > 300) events.erase(events.begin(), events.end() - 300);
+    statusLine = text;
+}
+
+void App::ClearEvents() {
+    events.clear();
+    statusLine.clear();
+}
+
+void App::SetProgress(const std::string& text, double fraction) {
+    if (!progressActive) progressStart = std::chrono::steady_clock::now();
+    progressActive = true;
+    progressText = text;
+    progressValue = fraction;
+    statusLine = text;
+}
+
+void App::ClearProgress() {
+    progressActive = false;
+    progressText.clear();
+    progressValue = -1.0;
+    progressStart = std::chrono::steady_clock::time_point();
+}
+
+void App::ClaimDialog(const std::string& key) {
+    if (key.empty()) return;
+    if (std::find(claimedDialogs.begin(), claimedDialogs.end(), key) == claimedDialogs.end()) {
+        claimedDialogs.push_back(key);
+    }
+}
+
+void App::OpenFileDialog(const std::string& key, const std::string& title, const char* filters,
+                         const IGFD::FileDialogConfig& config) {
+    ImGuiFileDialog* dialog = ImGuiFileDialog::Instance();
+    if (dialog->IsOpened() && dialog->GetOpenedKey() != key) {
+        dialog->Close();
+        LogEvent("Файловый диалог был открыт другой формой — закрыт", LogWarn);
+    }
+    dialog->OpenDialog(key, title, filters, config);
+    ClaimDialog(key);
+}
+
+void App::CloseStaleDialogs(const std::vector<std::string>& extraKeys) {
+    ImGuiFileDialog* dialog = ImGuiFileDialog::Instance();
+    if (!dialog->IsOpened()) return;
+    const std::string key = dialog->GetOpenedKey();
+    if (key.empty()) {
+        dialog->Close();
+        return;
+    }
+    for (const std::string& claimed : claimedDialogs) {
+        if (claimed == key) return;
+    }
+    for (const std::string& claimed : extraKeys) {
+        if (claimed == key) return;
+    }
+    dialog->Close();
+    LogEvent("Диалог выбора файла «" + key + "» остался без формы — закрыт", LogWarn);
+}
 
 void App::MarkRulesChanged() { ++rulesVersion; }
 
@@ -301,18 +376,18 @@ void App::RenderMenuBar() {
     if (ImGui::BeginMenu(ICON_FA_FILE " Файл")) {
         if (ImGui::MenuItem(ICON_FA_FILE_CIRCLE_PLUS " Создать новую базу")) {
             if (SaveAllViews()) {
-                ImGuiFileDialog::Instance()->OpenDialog("NewDbDlg", "Файл для новой базы", ".db");
+                OpenFileDialog("NewDbDlg", "Файл для новой базы", ".db");
             }
         }
         if (ImGui::MenuItem(ICON_FA_FOLDER_OPEN " Открыть базу")) {
             if (SaveAllViews()) {
-                ImGuiFileDialog::Instance()->OpenDialog("OpenDbDlg", "Файл базы данных", ".db");
+                OpenFileDialog("OpenDbDlg", "Файл базы данных", ".db");
             }
         }
         if (!dbPath.empty() && ImGui::MenuItem(ICON_FA_FLOPPY_DISK " Сохранить базу как...")) {
             IGFD::FileDialogConfig config;
             config.filePathName = dbPath;
-            ImGuiFileDialog::Instance()->OpenDialog("SaveDbAsDlg", "Сохранить базу как", ".db", config);
+            OpenFileDialog("SaveDbAsDlg", "Сохранить базу как", ".db", config);
         }
         ImGui::Separator();
         if (ImGui::BeginMenu(ICON_FA_CLOCK_ROTATE_LEFT " Недавние")) {
@@ -328,13 +403,6 @@ void App::RenderMenuBar() {
                 BackupDatabase("exit");
                 if (window) glfwSetWindowShouldClose(window, true);
             }
-        }
-        ImGui::EndMenu();
-    }
-
-    if (ImGui::BeginMenu(ICON_FA_UPLOAD " Импорт")) {
-        if (ImGui::MenuItem(ICON_FA_FILE_IMPORT " Импорт оборота (ODS/XLSX/XML)")) {
-            CreateView<ImportView>("Импорт оборота");
         }
         ImGui::EndMenu();
     }
@@ -383,6 +451,21 @@ void App::RenderMenuBar() {
         ImGui::EndMenu();
     }
 
+    if (ImGui::BeginMenu(ICON_FA_UPLOAD " Импорт")) {
+        if (ImGui::MenuItem(ICON_FA_FILE_IMPORT " Импорт оборотов (ODS/XLSX/XML)")) {
+            CreateView<ImportView>("Импорт оборота");
+        }
+        ImGui::Separator();
+        if (ImGui::MenuItem(ICON_FA_LANDMARK " Импорт федерального справочника (ЕСКЛП/ГРЛС)")) {
+            CreateView<RegistryImportView>("Федеральные справочники");
+        }
+        ImGui::Separator();
+        ImGui::MenuItem(ICON_FA_FILE_IMPORT " Импорт правил", nullptr, false, false);
+        ImGui::MenuItem(ICON_FA_FILE_EXPORT " Экспорт правил", nullptr, false, false);
+        ImGui::TextDisabled("Импорт/экспорт правил — в разработке");
+        ImGui::EndMenu();
+    }
+
     if (ImGui::BeginMenu(ICON_FA_PAINTBRUSH " Вид")) {
         if (ImGui::BeginMenu("Тема")) {
             if (ImGui::MenuItem("Тёмная")) ApplyTheme(0);
@@ -392,6 +475,9 @@ void App::RenderMenuBar() {
             ImGui::EndMenu();
         }
         ImGui::SliderInt("Шрифт", &fontSize, 14, 40);
+        ApplyFont(fontSize);
+
+        if (ImGui::MenuItem(ICON_FA_LIST_CHECK "  Журнал событий")) showEventLog = !showEventLog;
         ApplyFont(fontSize);
 
         if (ImGui::BeginMenu(ICON_FA_TABLE "  Открытые формы")) {
@@ -417,21 +503,90 @@ void App::RenderMenuBar() {
     ImGui::EndMainMenuBar();
 }
 
+namespace {
+ImVec4 LogLevelColor(int level) {
+    switch (level) {
+        case LogWarn: return ImVec4(1.00f, 0.82f, 0.35f, 1.00f);
+        case LogError: return ImVec4(1.00f, 0.42f, 0.42f, 1.00f);
+        case LogSuccess: return ImVec4(0.42f, 0.95f, 0.55f, 1.00f);
+        default: return ImVec4(0.92f, 0.94f, 0.96f, 1.00f);
+    }
+}
+}  // namespace
+
 void App::RenderStatusBar() {
     const ImGuiViewport* vp = ImGui::GetMainViewport();
-    ImGui::SetNextWindowPos(ImVec2(vp->Pos.x, vp->Pos.y + vp->Size.y - 36), ImGuiCond_Always);
-    ImGui::SetNextWindowSize(ImVec2(vp->Size.x, 36), ImGuiCond_Always);
+    const float height = 62.0f;
+    ImGui::SetNextWindowPos(ImVec2(vp->Pos.x, vp->Pos.y + vp->Size.y - height), ImGuiCond_Always);
+    ImGui::SetNextWindowSize(ImVec2(vp->Size.x, height), ImGuiCond_Always);
     if (ImGui::Begin("Статус", nullptr,
                      ImGuiWindowFlags_NoTitleBar | ImGuiWindowFlags_NoResize |
                      ImGuiWindowFlags_NoMove | ImGuiWindowFlags_NoDocking |
                      ImGuiWindowFlags_NoBringToFrontOnFocus)) {
-        ImGui::Text("%s", statusLine.empty() ? "Готово" : statusLine.c_str());
+        if (events.empty()) {
+            ImGui::TextDisabled("Журнал событий пуст — откройте базу или импорт.");
+        } else {
+            const LogEntry& last = events.back();
+            ImGui::TextColored(LogLevelColor(last.level), "%s  %s", last.time.c_str(),
+                               last.text.c_str());
+        }
         ImGui::SameLine();
-        ImGui::TextDisabled("·  форм открыто: %zu", views.size());
-        ImGui::SameLine();
-        ImGui::TextDisabled("·  Ctrl+W — закрыть активную форму");
+        ImGui::TextDisabled("·  форм: %zu", views.size());
         ImGui::SameLine();
         ImGui::TextDisabled("·  база: %s", dbPath.empty() ? "не выбрана" : dbPath.c_str());
+        ImGui::SameLine();
+        if (ImGui::SmallButton(showEventLog ? ICON_FA_XMARK "  скрыть журнал"
+                                           : ICON_FA_LIST_CHECK "  журнал")) {
+            showEventLog = !showEventLog;
+        }
+
+        if (progressActive) {
+            double elapsed = std::chrono::duration<double>(
+                                 std::chrono::steady_clock::now() - progressStart).count();
+            float fraction = 1.0f;
+            if (progressValue < 0.0) {
+                fraction = static_cast<float>(std::fmod(elapsed, 2.0) / 2.0);
+                ImGui::ProgressBar(fraction, ImVec2(-1.0f, 12.0f));
+                ImGui::TextDisabled("%s  ·  идёт обработка, %.0f с — это не зависание",
+                                    progressText.c_str(), elapsed);
+            } else {
+                fraction = static_cast<float>(std::clamp(progressValue, 0.0, 1.0));
+                ImGui::ProgressBar(fraction, ImVec2(-1.0f, 12.0f));
+                ImGui::TextDisabled("%s  ·  %.0f%%", progressText.c_str(), fraction * 100.0f);
+            }
+        } else if (events.size() > 1) {
+            const LogEntry& prev = events[events.size() - 2];
+            ImGui::TextDisabled("%s  %s", prev.time.c_str(), prev.text.c_str());
+        }
+
+        ImGui::End();
+    }
+}
+
+void App::RenderEventLog() {
+    if (!showEventLog) return;
+
+    const ImGuiViewport* vp = ImGui::GetMainViewport();
+    ImGui::SetNextWindowPos(ImVec2(vp->Pos.x + vp->Size.x - 460.0f,
+                                   vp->Pos.y + vp->Size.y - 340.0f),
+                            ImGuiCond_FirstUseEver);
+    ImGui::SetNextWindowSize(ImVec2(460.0f, 300.0f), ImGuiCond_FirstUseEver);
+    if (ImGui::Begin(ICON_FA_LIST_CHECK "  Журнал событий###eventlog", &showEventLog,
+                     ImGuiWindowFlags_NoDocking)) {
+        ImGui::TextDisabled("Событий: %zu (новые сверху)", events.size());
+        ImGui::SameLine();
+        if (ImGui::SmallButton("Очистить")) ClearEvents();
+        ImGui::Separator();
+
+        if (ImGui::BeginChild("eventlog_body", ImVec2(0.0f, 0.0f), true,
+                              ImGuiWindowFlags_HorizontalScrollbar)) {
+            if (events.empty()) ImGui::TextDisabled("(пусто)");
+            for (auto it = events.rbegin(); it != events.rend(); ++it) {
+                ImGui::TextColored(LogLevelColor(it->level), "%s  %s", it->time.c_str(),
+                                   it->text.c_str());
+            }
+        }
+        ImGui::EndChild();
         ImGui::End();
     }
 }
@@ -449,6 +604,7 @@ void App::RenderErrorPopup() {
 
 void App::RenderViews() {
     ImGuiIO& io = ImGui::GetIO();
+    claimedDialogs.clear();
     if (io.KeyMods & ImGuiMod_Ctrl) {
         if (ImGui::IsKeyPressed(ImGuiKey_W)) CloseFocusedView();
     }
@@ -475,5 +631,6 @@ void App::RenderViews() {
     focusedView = currentFocus;
 
     RenderStatusBar();
+    RenderEventLog();
     RenderErrorPopup();
 }

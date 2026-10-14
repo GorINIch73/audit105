@@ -19,16 +19,12 @@ void CategoriesEditorView::RefreshData() {
 
 void CategoriesEditorView::RebuildFiltered() {
     filtered.clear();
-    const std::string needle = ToLowerUtf8(search);
 
     for (const Category& cat : categories) {
-        if (activeOnly && !cat.active) continue;
-        if (!needle.empty()) {
-            bool hit = ContainsUtf8(cat.name, needle) ||
-                       ContainsUtf8(cat.description, needle) ||
-                       ContainsUtf8(cat.color, needle);
-            if (!hit) continue;
-        }
+        std::vector<std::string> fields = {
+            cat.name, cat.description, cat.color
+        };
+        if (!MatchesFilter(search, fields)) continue;
         filtered.push_back(cat);
     }
 
@@ -190,30 +186,71 @@ void CategoriesEditorView::DeleteSelected() {
     }
 }
 
-void CategoriesEditorView::RenderFilters() {
-    ImGui::Text(ICON_FA_FILTER "  Фильтры");
-    if (ImGui::BeginTable("categories_filters", 3, ImGuiTableFlags_Borders)) {
-        ImGui::TableSetupColumn("Поиск", ImGuiTableColumnFlags_WidthStretch);
-        ImGui::TableSetupColumn("Параметры", ImGuiTableColumnFlags_WidthFixed, 140.0f);
-        ImGui::TableSetupColumn("Действия", ImGuiTableColumnFlags_WidthFixed, 190.0f);
-
-        ImGui::TableNextRow();
-
-        ImGui::TableNextColumn();
-        InputTextSync("Поиск", search, FitItemWidth("Поиск"));
-
-        ImGui::TableNextColumn();
-        ImGui::Checkbox("Только активные", &activeOnly);
-
-        ImGui::TableNextColumn();
-        if (ImGui::Button(ICON_FA_ERASER "  Очистить все фильтры")) {
-            search.clear();
-            activeOnly = false;
-        }
-
-        ImGui::EndTable();
+void CategoriesEditorView::DeleteFilteredCategories() {
+    if (!app || !app->HasDatabase()) return;
+    if (filtered.empty()) {
+        app->ShowError("По текущему фильтру нет категорий — измените фильтр");
+        return;
     }
 
+    int movedRules = 0;
+    for (const Category& category : filtered) {
+        for (const Rule& rule : rules) {
+            if (EqualsUtf8Insensitive(rule.category, category.name)) ++movedRules;
+        }
+    }
+
+    std::string modalId = "bulk_delete_categories_" + std::to_string(filtered.size());
+    if (ImGui::Button((ICON_FA_TRASH "  Удалить категории по фильтру (" +
+                       std::to_string(filtered.size()) + ")").c_str())) {
+        ImGui::OpenPopup(modalId.c_str());
+    }
+    if (ConfirmationModal(modalId, "Удалить категории по фильтру",
+                         "Удалить " + std::to_string(filtered.size()) + " категорий? Правила из них (" +
+                         std::to_string(movedRules) + ") будут перенесены в другую категорию. "
+                         "Отменить это нельзя.",
+                         "Удалить", "Отмена")) {
+        int removed = 0;
+        for (const Category& category : filtered) {
+            if (app->Db().DeleteCategory(category.id)) ++removed;
+        }
+        if (removed > 0) {
+            app->MarkRulesChanged();
+            app->SetStatus("Удалено категорий: " + std::to_string(removed) +
+                           " — правила перенесены в другую категорию");
+            selectedId = 0;
+            highlightId = 0;
+            RefreshData();
+        } else {
+            app->ShowError("Не удалось удалить категории");
+        }
+    }
+}
+
+void CategoriesEditorView::RenderBulkOperations() {
+    if (!app || !app->HasDatabase()) return;
+
+    if (!ImGui::CollapsingHeader(ICON_FA_USERS "  Групповые операции")) return;
+
+    ImGui::TextDisabled("Операции применяются ко всем категориям, прошедшим фильтр. Удаление необратимо.");
+    DeleteFilteredCategories();
+}
+
+void CategoriesEditorView::RenderFilters() {
+    ImGui::Text(ICON_FA_FILTER "  Фильтр");
+    ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(0.7f, 0.7f, 0.7f, 1.0f));
+    ImGui::TextDisabled("Фразы через запятую — И; внутри фразы поиск по всем полям — ИЛИ");
+    ImGui::PopStyleColor();
+    ImGui::PushStyleColor(ImGuiCol_FrameBg, ImVec4(0.16f, 0.24f, 0.32f, 1.0f));
+    ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(0.92f, 0.95f, 1.0f, 1.0f));
+    ImGui::InputText("##categories_filter", &search, ImGuiInputTextFlags_EnterReturnsTrue);
+    ImGui::PopStyleColor();
+    ImGui::PopStyleColor();
+    ImGui::SameLine();
+    if (ImGui::Button(ICON_FA_ERASER "  Очистить")) {
+        search.clear();
+    }
+    ImGui::Separator();
     RebuildFiltered();
 }
 
@@ -397,6 +434,7 @@ void CategoriesEditorView::Render() {
         ImGui::Separator();
 
         RenderFilters();
+        RenderBulkOperations();
         ImGui::Separator();
 
         const float available = ImGui::GetContentRegionAvail().x;

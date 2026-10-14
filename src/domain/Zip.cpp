@@ -121,4 +121,16 @@ const Entry* FindEntry(const std::vector<Entry>& entries, const std::string& nam
     return nullptr;
 }
 
+bool EntryRange(const std::string& data, const Entry& entry, size_t& from, size_t& length) {
+    size_t header = entry.localOffset;
+    if (header + 30 > data.size()) return false;
+    if (data[header] != 'P' || data[header + 1] != 'K' || data[header + 2] != 0x03 || data[header + 3] != 0x04)
+        return false;
+    size_t nameLen = ReadU16(data, header + 26);
+    size_t extraLen = ReadU16(data, header + 28);
+    from = header + 30 + nameLen + extraLen;
+    length = entry.compSize;
+    return from + length <= data.size();
+}
+
 }  // namespace zip

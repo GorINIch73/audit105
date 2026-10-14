@@ -43,6 +43,32 @@ int main() {
     Check(db.CountRulesByCodePrefix("OS") == 3, "fixed-asset candidate rules seeded");
     Check(db.ListTerms().size() == 25, "example term lists seeded");
 
+    int seededTermLists = 0;
+    bool termListHasMeta = false;
+    for (const TermList& list : db.ListTermLists()) {
+        if (list.ruleCode.rfind("OMS", 0) != 0) continue;
+        ++seededTermLists;
+        if (!list.description.empty() && !list.sourceDoc.empty() && !list.asOfDate.empty()) {
+            termListHasMeta = true;
+        }
+    }
+    Check(seededTermLists == 5, "example term rules have their term lists");
+    Check(termListHasMeta, "example term lists carry description, source and date");
+
+    bool everyTermRuleHasList = true;
+    for (const Rule& rule : db.ListRules()) {
+        if (rule.type != "term") continue;
+        bool hasList = false;
+        for (const TermList& list : db.ListTermLists()) {
+            if (list.ruleId == rule.id) {
+                hasList = true;
+                break;
+            }
+        }
+        if (!hasList) everyTermRuleHasList = false;
+    }
+    Check(everyTermRuleHasList, "every term rule has a term list");
+
     bool hasOmsTerms = false;
     for (const Term& term : db.ListTerms()) {
         if (term.ruleCode == "OMS01") hasOmsTerms = true;
@@ -168,6 +194,18 @@ int main() {
     }
     Check(db.DeleteTerm(termId), "delete term");
     Check(db.ListTerms().size() == termBase, "term removed");
+
+    Term autoListTerm;
+    autoListTerm.ruleId = omsRuleId;
+    autoListTerm.term = "Термин с новым перечнем";
+    autoListTerm.listName = "Перечень из термина";
+    Check(db.AddTerm(autoListTerm), "term added with a brand new list name");
+    int64_t autoListId = 0;
+    for (const TermList& list : db.ListTermLists()) {
+        if (list.ruleId == omsRuleId && list.name == "Перечень из термина") autoListId = list.id;
+    }
+    Check(autoListId != 0, "term list auto-created when a term names a new list");
+    Check(db.DeleteTermList(autoListId), "auto-created term list removed");
 
     int64_t blankRuleId = db.CreateBlankRule(attentionCategoryId);
     Check(blankRuleId > 0, "blank rule created with id");

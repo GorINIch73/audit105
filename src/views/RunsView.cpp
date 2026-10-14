@@ -30,7 +30,7 @@ void RunsView::RefreshData() {
 
 void RunsView::RenderTable() {
     if (runs.empty()) {
-        ImGui::TextDisabled("Нет прогонов по текущим фильтрам. Импортируйте оборот (Импорт → Импорт оборота).");
+        ImGui::TextDisabled("Нет прогонов по текущим фильтрам. Импортируйте оборот (Импорт → Импорт оборотов).");
         return;
     }
 

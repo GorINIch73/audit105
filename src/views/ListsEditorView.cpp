@@ -69,19 +69,12 @@ std::vector<Term> ListsEditorView::DraftTerms() const {
 
 void ListsEditorView::RebuildFiltered() {
     filtered.clear();
-    const std::string needle = ToLowerUtf8(search);
 
     for (const TermList& list : lists) {
-        if (activeOnly && !list.active) continue;
-        if (ruleFilterId != 0 && list.ruleId != ruleFilterId) continue;
-        if (!needle.empty()) {
-            bool hit = ContainsUtf8(list.name, needle) ||
-                       ContainsUtf8(list.description, needle) ||
-                       ContainsUtf8(list.ruleCode, needle) ||
-                       ContainsUtf8(list.sourceDoc, needle) ||
-                       ContainsUtf8(list.asOfDate, needle);
-            if (!hit) continue;
-        }
+        std::vector<std::string> fields = {
+            list.name, list.description, list.ruleCode, list.sourceDoc, list.asOfDate
+        };
+        if (!MatchesFilter(search, fields)) continue;
         filtered.push_back(list);
     }
 
@@ -137,7 +130,7 @@ void ListsEditorView::LoadDraft() {
         draft = filtered[static_cast<size_t>(idx)];
     } else {
         draft = TermList();
-        draft.ruleId = ruleFilterId;
+        draft.ruleId = 0;
         draft.active = true;
     }
 }
@@ -179,7 +172,7 @@ void ListsEditorView::SaveDraft() {
 
 void ListsEditorView::AddDraft() {
     if (!app || !app->HasDatabase()) return;
-    int64_t id = app->Db().CreateBlankList(ruleFilterId);
+    int64_t id = app->Db().CreateBlankList(0);
     if (id == 0) {
         app->ShowError("Не удалось создать перечень");
         return;
@@ -269,68 +262,69 @@ void ListsEditorView::AddTermsToDraft() {
     Select(selectedId);
 }
 
+void ListsEditorView::DeleteFilteredLists() {
+    if (!app || !app->HasDatabase()) return;
+    if (filtered.empty()) {
+        app->ShowError("По текущему фильтру нет перечней — измените фильтр");
+        return;
+    }
+
+    int listTerms = 0;
+    for (const TermList& list : filtered) {
+        listTerms += list.termCount;
+    }
+
+    std::string modalId = "bulk_delete_lists_" + std::to_string(filtered.size());
+    if (ImGui::Button((ICON_FA_TRASH "  Удалить перечни по фильтру (" +
+                       std::to_string(filtered.size()) + ", терминов: " +
+                       std::to_string(listTerms) + ")").c_str())) {
+        ImGui::OpenPopup(modalId.c_str());
+    }
+    if (ConfirmationModal(modalId, "Удалить перечни по фильтру",
+                         "Перечни будут очищены целиком (термины удалены). Правила останутся. "
+                         "Отменить это нельзя.",
+                         "Удалить", "Отмена")) {
+        std::vector<TermList> targets;
+        for (const TermList& list : filtered) targets.push_back(list);
+        int removed = app->Db().DeleteTermLists(targets);
+        if (removed > 0) {
+            app->MarkRulesChanged();
+            app->SetStatus("Очищено перечней: " + std::to_string(static_cast<int>(targets.size())) +
+                           ", удалено терминов: " + std::to_string(removed));
+            selectedId = 0;
+            highlightId = 0;
+            RefreshData();
+        } else {
+            app->ShowError("Не удалось удалить перечни");
+        }
+    }
+}
+
+void ListsEditorView::RenderBulkOperations() {
+    if (!app || !app->HasDatabase()) return;
+
+    if (!ImGui::CollapsingHeader(ICON_FA_USERS "  Групповые операции")) return;
+
+    ImGui::TextDisabled("Операции применяются ко всем перечням, прошедшим фильтр. Удаление необратимо.");
+    ImGui::TextDisabled("Правила и термины здесь не удаляются — термины правятся в форме «Термины и списки».");
+    DeleteFilteredLists();
+}
+
 void ListsEditorView::RenderFilters() {
-    std::vector<int64_t> ruleIds;
-    std::vector<std::string> ruleLabels;
-    for (const Rule& rule : rules) {
-        ruleIds.push_back(rule.id);
-        ruleLabels.push_back(rule.code);
+    ImGui::Text(ICON_FA_FILTER "  Фильтр");
+    ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(0.7f, 0.7f, 0.7f, 1.0f));
+    ImGui::TextDisabled("Фразы через запятую — И; внутри фразы поиск по всем полям — ИЛИ");
+    ImGui::PopStyleColor();
+    ImGui::PushStyleColor(ImGuiCol_FrameBg, ImVec4(0.16f, 0.24f, 0.32f, 1.0f));
+    ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(0.92f, 0.95f, 1.0f, 1.0f));
+    ImGui::InputText("##lists_filter", &search, ImGuiInputTextFlags_EnterReturnsTrue);
+    ImGui::PopStyleColor();
+    ImGui::PopStyleColor();
+    ImGui::SameLine();
+    if (ImGui::Button(ICON_FA_ERASER "  Очистить")) {
+        search.clear();
     }
-
-    int ruleIndex = -1;
-    std::string ruleText;
-    for (size_t i = 0; i < ruleIds.size(); ++i) {
-        if (ruleIds[i] == ruleFilterId) {
-            ruleIndex = static_cast<int>(i);
-            break;
-        }
-    }
-
-    ImGui::Text(ICON_FA_FILTER "  Фильтры");
-    if (ImGui::BeginTable("lists_filters", 3, ImGuiTableFlags_Borders)) {
-        ImGui::TableSetupColumn("Поиск", ImGuiTableColumnFlags_WidthStretch);
-        ImGui::TableSetupColumn("Параметры", ImGuiTableColumnFlags_WidthFixed, 140.0f);
-        ImGui::TableSetupColumn("Действия", ImGuiTableColumnFlags_WidthFixed, 190.0f);
-
-        ImGui::TableNextRow();
-
-        ImGui::TableNextColumn();
-        InputTextSync("Поиск", search, FitItemWidth("Поиск"));
-
-        ImGui::TableNextColumn();
-        ImGui::Checkbox("Только активные", &activeOnly);
-
-        ImGui::TableNextColumn();
-        if (ImGui::Button(ICON_FA_ERASER "  Очистить все фильтры")) {
-            search.clear();
-            activeOnly = false;
-            ruleIndex = -1;
-        }
-
-        ImGui::TableNextRow();
-
-        ImGui::TableNextColumn();
-        ImGui::SetNextItemWidth(FitItemWidth("Правило"));
-        ComboWithFilter("Правило", ruleLabels, ruleIndex, ruleText);
-
-        ImGui::TableNextColumn();
-        ImGui::TextDisabled("Перечень — справочник терминов одного правила");
-
-        ImGui::TableNextColumn();
-        ImGui::TextDisabled("Терминов в перечнях: %d",
-                            [&]() {
-                                int total = 0;
-                                for (const TermList& list : lists) total += list.termCount;
-                                return total;
-                            }());
-
-        ImGui::EndTable();
-    }
-
-    ruleFilterId = (ruleIndex >= 0 && ruleIndex < static_cast<int>(ruleIds.size()))
-                   ? ruleIds[static_cast<size_t>(ruleIndex)]
-                   : 0;
-
+    ImGui::Separator();
     RebuildFiltered();
 }
 
@@ -563,6 +557,7 @@ void ListsEditorView::Render() {
         ImGui::Separator();
 
         RenderFilters();
+        RenderBulkOperations();
         ImGui::Separator();
 
         const float available = ImGui::GetContentRegionAvail().x;

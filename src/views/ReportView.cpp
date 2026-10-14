@@ -15,6 +15,7 @@
 #include <map>
 #include <sstream>
 #include <unordered_map>
+#include <unordered_set>
 
 namespace {
 
@@ -58,44 +59,170 @@ std::string ReportDirectory() {
     return dir;
 }
 
+double CloseBalance(const ItemRecord& rec) {
+    return rec.item.closeDebit - rec.item.closeCredit;
+}
+
+void SortByBalance(std::vector<ItemRecord>& rows) {
+    std::sort(rows.begin(), rows.end(), [](const ItemRecord& a, const ItemRecord& b) {
+        return CloseBalance(a) > CloseBalance(b);
+    });
+}
+
 }  // namespace
 
 void ReportView::RefreshData() {
     if (!app || !app->HasDatabase()) return;
     runs = app->Db().ListRuns("", "", "", false);
     if (runIndex < 0 || runIndex >= static_cast<int>(runs.size())) runIndex = 0;
+    categories = app->Db().ListCategories();
+    categoryColor.clear();
+    categoryHex.clear();
+    for (const Category& cat : categories) {
+        categoryColor[cat.name] = ParseHexColor(cat.color);
+        categoryHex[cat.name] = NormalizeHexColor(cat.color);
+    }
     if (!runs.empty()) {
         items = app->Db().ListRunItems(runs[static_cast<size_t>(runIndex)].id);
         flags = app->Db().ListRunFlags(runs[static_cast<size_t>(runIndex)].id);
     }
+
+    std::unordered_map<std::string, int> seen;
+    for (const Flag& flag : flags) ++seen[flag.ruleCode];
+    for (const ItemRecord& rec : items) {
+        if (!rec.ruleCode.empty()) ++seen[rec.ruleCode];
+    }
+    ruleCodes.clear();
+    ruleCodes.reserve(seen.size());
+    for (const auto& entry : seen) ruleCodes.push_back(entry.first);
+    std::sort(ruleCodes.begin(), ruleCodes.end());
+    ruleSelected.assign(ruleCodes.size(), 1);
+}
+
+void ReportView::SelectRules(const std::vector<std::string>& codes) {
+    if (codes.empty()) {
+        ruleSelected.assign(ruleCodes.size(), 1);
+        return;
+    }
+    ruleSelected.assign(ruleCodes.size(), 0);
+    for (size_t i = 0; i < ruleCodes.size(); ++i) {
+        for (const std::string& code : codes) {
+            if (ruleCodes[i] == code) {
+                ruleSelected[i] = 1;
+                break;
+            }
+        }
+    }
+}
+
+std::vector<ItemRecord> ReportView::FilteredRows() const {
+    std::unordered_set<std::string> selected;
+    for (size_t i = 0; i < ruleCodes.size(); ++i) {
+        if (ruleSelected.empty() || ruleSelected[i]) selected.insert(ruleCodes[i]);
+    }
+
+    std::unordered_set<int64_t> matchedItems;
+    if (!ruleCodes.empty()) {
+        for (const Flag& flag : flags) {
+            if (selected.count(flag.ruleCode)) matchedItems.insert(flag.itemId);
+        }
+    }
+
+    const std::string needle = ToLowerUtf8(search);
+
+    std::vector<ItemRecord> out;
+    for (const ItemRecord& rec : items) {
+        if (onlyFlagged && rec.ruleCode.empty()) continue;
+        if (!ruleCodes.empty() && !matchedItems.count(rec.id)) continue;
+        if (!categoryFilter.empty() && rec.category != categoryFilter) continue;
+        if (!subFilter.empty() && !ContainsUtf8(rec.subaccount, subFilter)) continue;
+        if (minSum > 0.0 && CloseBalance(rec) < minSum) continue;
+        if (!needle.empty() && !ContainsUtf8(rec.item.nameNorm, needle)) continue;
+        out.push_back(rec);
+    }
+    SortByBalance(out);
+    return out;
+}
+
+std::vector<Flag> ReportView::FilteredFlags() const {
+    std::unordered_set<std::string> selected;
+    for (size_t i = 0; i < ruleCodes.size(); ++i) {
+        if (ruleSelected.empty() || ruleSelected[i]) selected.insert(ruleCodes[i]);
+    }
+
+    std::unordered_set<int64_t> shownIds;
+    for (const ItemRecord& rec : FilteredRows()) shownIds.insert(rec.id);
+
+    std::vector<Flag> out;
+    for (const Flag& flag : flags) {
+        if (!shownIds.count(flag.itemId)) continue;
+        if (!ruleCodes.empty() && !selected.count(flag.ruleCode)) continue;
+        out.push_back(flag);
+    }
+    return out;
+}
+
+std::string ReportView::FilterLabel() const {
+    int selectedCount = 0;
+    for (size_t i = 0; i < ruleCodes.size(); ++i) {
+        if (ruleSelected.empty() || ruleSelected[i]) ++selectedCount;
+    }
+    std::ostringstream out;
+    if (ruleCodes.empty()) {
+        out << "правил нет";
+    } else if (selectedCount == static_cast<int>(ruleCodes.size())) {
+        out << "все правила (" << ruleCodes.size() << ")";
+    } else if (selectedCount == 0) {
+        out << "правила не выбраны";
+    } else {
+        out << "правила: ";
+        bool first = true;
+        for (size_t i = 0; i < ruleCodes.size(); ++i) {
+            if (!ruleSelected[i]) continue;
+            if (!first) out << ", ";
+            out << ruleCodes[i];
+            first = false;
+        }
+    }
+    if (!categoryFilter.empty()) out << " · категория: " << categoryFilter;
+    if (!subFilter.empty()) out << " · субсчёт: " << subFilter;
+    if (minSum > 0.0) out << " · остаток ≥ " << FormatAmount(minSum);
+    if (!search.empty()) out << " · поиск: " << search;
+    return out.str();
 }
 
 std::string ReportView::ExportCsv() {
-    std::string path = ReportDirectory() + "/run_" + std::to_string(runs[static_cast<size_t>(runIndex)].id) +
+    const Run& run = runs[static_cast<size_t>(runIndex)];
+    std::string path = ReportDirectory() + "/run_" + std::to_string(run.id) +
                        "_" + NowStamp() + ".csv";
     std::ofstream out(path);
     if (!out) return {};
 
-    out << "row,name,subaccount,opening,debit,credit,closing,qty_close,unit_price,rule,category,severity,amount,rationale\n";
-    std::unordered_map<int64_t, std::vector<Flag>> byItem;
-    for (const Flag& flag : flags) byItem[flag.itemId].push_back(flag);
+    std::vector<ItemRecord> rows = FilteredRows();
+    std::vector<Flag> filteredFlags = FilteredFlags();
 
-    for (const ItemRecord& rec : items) {
+    out << "# Прогон #" << run.id << " | " << run.file << " | период: " << run.period
+        << " | фильтр: " << FilterLabel() << " | строк: " << rows.size() << "\n";
+    out << "row,name,subaccount,opening,debit,credit,closing,qty_close,unit_price,rule,category,severity,amount,rationale\n";
+
+    std::unordered_map<int64_t, std::vector<Flag>> byItem;
+    for (const Flag& flag : filteredFlags) byItem[flag.itemId].push_back(flag);
+
+    for (const ItemRecord& rec : rows) {
         auto it = byItem.find(rec.id);
         if (it == byItem.end()) {
             out << rec.item.rowNo << "," << CsvEscape(rec.item.nameRaw) << "," << CsvEscape(rec.subaccount)
                 << "," << rec.item.openDebit - rec.item.openCredit << "," << rec.item.inDebit << ","
-                << rec.item.outCredit << "," << rec.item.closeDebit - rec.item.closeCredit << ","
-                << rec.item.qtyClose << "," << rec.item.unitPrice << ",,,0,0,\"\"\n";
+                << rec.item.outCredit << "," << CloseBalance(rec) << "," << rec.item.qtyClose << ","
+                << rec.item.unitPrice << ",,,0,0,\"\"\n";
             continue;
         }
         for (const Flag& flag : it->second) {
             out << rec.item.rowNo << "," << CsvEscape(rec.item.nameRaw) << "," << CsvEscape(rec.subaccount)
                 << "," << rec.item.openDebit - rec.item.openCredit << "," << rec.item.inDebit << ","
-                << rec.item.outCredit << "," << rec.item.closeDebit - rec.item.closeCredit << ","
-                << rec.item.qtyClose << "," << rec.item.unitPrice << "," << CsvEscape(flag.ruleCode) << ","
-                << CsvEscape(flag.category) << "," << flag.severity << "," << flag.amount << ","
-                << CsvEscape(flag.rationale) << "\n";
+                << rec.item.outCredit << "," << CloseBalance(rec) << "," << rec.item.qtyClose << ","
+                << rec.item.unitPrice << "," << CsvEscape(flag.ruleCode) << "," << CsvEscape(flag.category)
+                << "," << flag.severity << "," << flag.amount << "," << CsvEscape(flag.rationale) << "\n";
         }
     }
     return path;
@@ -107,20 +234,23 @@ std::string ReportView::ExportHtml() {
     std::ofstream out(path);
     if (!out) return {};
 
-    std::unordered_map<std::string, std::pair<int, double>> byCategory;
-    std::unordered_map<std::string, std::pair<int, double>> bySubaccount;
-    std::unordered_map<std::string, std::pair<int, double>> byRule;
+    std::vector<ItemRecord> rows = FilteredRows();
+    std::vector<Flag> filteredFlags = FilteredFlags();
+
+    std::map<std::string, std::pair<int, double>> byCategory;
+    std::map<std::string, std::pair<int, double>> bySubaccount;
+    std::map<std::string, std::pair<int, double>> byRule;
     double totalFlagged = 0.0;
-    for (const Flag& flag : flags) {
+    for (const Flag& flag : filteredFlags) {
         byCategory[flag.category].first += 1;
         byCategory[flag.category].second += flag.amount;
         byRule[flag.ruleCode].first += 1;
         byRule[flag.ruleCode].second += flag.amount;
         totalFlagged += flag.amount;
     }
-    for (const ItemRecord& rec : items) {
+    for (const ItemRecord& rec : rows) {
         bySubaccount[rec.subaccount].first += 1;
-        bySubaccount[rec.subaccount].second += rec.item.closeDebit - rec.item.closeCredit;
+        bySubaccount[rec.subaccount].second += CloseBalance(rec);
     }
 
     out << "<!doctype html><html lang=\"ru\"><head><meta charset=\"utf-8\"><title>Отчёт по прогону "
@@ -131,13 +261,17 @@ std::string ReportView::ExportHtml() {
     out << "<p>Файл: " << HtmlEscape(run.file) << " · формат: " << HtmlEscape(run.format)
         << " · учреждение: " << HtmlEscape(run.organization) << " · период: " << HtmlEscape(run.period)
         << " · импорт: " << HtmlEscape(run.importedAt) << "</p>";
-    out << "<p>Позиций: " << run.items << " · отмечено: " << run.flagged
-        << " · сумма отмеченных: " << FormatAmount(totalFlagged) << " ₽</p>";
+    out << "<p>Фильтр: " << HtmlEscape(FilterLabel()) << "</p>";
+    out << "<p>Позиций всего: " << run.items << " · в выборке: " << rows.size()
+        << " · отмечено: " << run.flagged << " · сумма отмеченных: " << FormatAmount(totalFlagged)
+        << " ₽</p>";
 
     out << "<h2>По категориям</h2><table><tr><th>Категория</th><th>Позиций</th><th>Сумма</th></tr>";
     for (const auto& entry : byCategory) {
-        out << "<tr><td>" << HtmlEscape(entry.first) << "</td><td>" << entry.second.first
-            << "</td><td>" << FormatAmount(entry.second.second) << "</td></tr>";
+        std::string hex = categoryHex.count(entry.first) ? categoryHex[entry.first] : "#e8eef3";
+        out << "<tr style=\"background:" << hex + "22\"><td>" << HtmlEscape(entry.first)
+            << "</td><td>" << entry.second.first << "</td><td>" << FormatAmount(entry.second.second)
+            << "</td></tr>";
     }
     out << "</table>";
 
@@ -155,25 +289,30 @@ std::string ReportView::ExportHtml() {
     }
     out << "</table>";
 
-    out << "<h2>Реестр помеченных позиций (топ-50)</h2><table><tr><th>Стр.</th><th>Номенклатура</th>"
-        "<th>Субсчёт</th><th>Остаток</th><th>Правило</th><th>Категория</th><th>Основание</th></tr>";
-    std::vector<ItemRecord> flaggedItems;
-    for (const ItemRecord& rec : items) {
-        if (!rec.ruleCode.empty()) flaggedItems.push_back(rec);
-    }
-    std::sort(flaggedItems.begin(), flaggedItems.end(), [](const ItemRecord& a, const ItemRecord& b) {
-        return a.item.closeDebit - a.item.closeCredit > b.item.closeDebit - b.item.closeCredit;
-    });
+    size_t shown = rowLimit < 0 ? rows.size() : std::min<size_t>(static_cast<size_t>(rowLimit), rows.size());
+    out << "<h2>Реестр позиций (" << shown << " из " << rows.size() << ")</h2><table><tr><th>Стр.</th>"
+        "<th>Номенклатура</th><th>Субсчёт</th><th>Остаток</th><th>Правило</th><th>Категория</th>"
+        "<th>Сумма</th><th>Основание</th></tr>";
     std::unordered_map<int64_t, std::string> rationaleByItem;
-    for (const Flag& flag : flags) {
+    std::unordered_map<int64_t, double> amountByItem;
+    std::unordered_map<int64_t, std::string> rulesByItem;
+    for (const Flag& flag : filteredFlags) {
         if (!rationaleByItem.count(flag.itemId)) rationaleByItem[flag.itemId] = flag.rationale;
+        amountByItem[flag.itemId] += flag.amount;
+        if (!rulesByItem[flag.itemId].empty()) rulesByItem[flag.itemId] += ", ";
+        rulesByItem[flag.itemId] += flag.ruleCode;
     }
-    for (size_t i = 0; i < std::min<size_t>(50, flaggedItems.size()); ++i) {
-        const ItemRecord& rec = flaggedItems[i];
-        out << "<tr><td>" << rec.item.rowNo << "</td><td>" << HtmlEscape(rec.item.nameRaw) << "</td><td>"
-            << HtmlEscape(rec.subaccount) << "</td><td>" << FormatAmount(rec.item.closeDebit - rec.item.closeCredit)
-            << "</td><td>" << HtmlEscape(rec.ruleCode) << "</td><td>" << HtmlEscape(rec.category)
-            << "</td><td>" << HtmlEscape(rationaleByItem[rec.id]) << "</td></tr>";
+    for (size_t i = 0; i < shown; ++i) {
+        const ItemRecord& rec = rows[i];
+        std::string hex = categoryHex.count(rec.category) ? categoryHex[rec.category] : "";
+        const std::string codes = rulesByItem.count(rec.id) ? rulesByItem[rec.id] : rec.ruleCode;
+        out << "<tr" << (hex.empty() ? "" : " style=\"background:" + hex + "22\"")
+            << "><td>" << rec.item.rowNo << "</td><td>" << HtmlEscape(rec.item.nameRaw) << "</td><td>"
+            << HtmlEscape(rec.subaccount) << "</td><td>" << FormatAmount(CloseBalance(rec)) << "</td><td>"
+            << HtmlEscape(codes) << "</td><td>" << HtmlEscape(rec.category) << "</td><td>"
+            << FormatAmount(amountByItem[rec.id]) << "</td><td>"
+            << HtmlEscape(rationaleByItem.count(rec.id) ? rationaleByItem[rec.id] : std::string())
+            << "</td></tr>";
     }
     out << "</table></body></html>";
     return path;
@@ -219,56 +358,184 @@ void ReportView::Render() {
         ImGui::Separator();
         ImGui::Text("Позиций: %d · отмечено: %d · примечаний: %d", run.items, run.flagged, run.noted);
 
-        std::map<std::string, std::pair<int, double>> byCategory;
-        for (const Flag& flag : flags) {
-            byCategory[flag.category].first += 1;
-            byCategory[flag.category].second += flag.amount;
+        ImGui::Separator();
+        ImGui::Text(ICON_FA_FILTER "  Фильтр строк (применяется и к экспорту)");
+        InputTextSync(ICON_FA_MAGNIFYING_GLASS "  Поиск", search);
+        ImGui::SameLine();
+        InputTextSync("Субсчёт", subFilter);
+        ImGui::SameLine();
+        AmountInput("Мин. остаток", minSum);
+        ImGui::SameLine();
+        ImGui::Checkbox("Только отмеченные", &onlyFlagged);
+
+        std::vector<std::string> catNames;
+        catNames.push_back("Все категории");
+        for (const Category& cat : categories) catNames.push_back(cat.name);
+        int catIndex = 0;
+        for (size_t i = 1; i < catNames.size(); ++i) {
+            if (catNames[i] == categoryFilter) catIndex = static_cast<int>(i);
         }
-        if (ImGui::BeginTable("report_categories", 4, ImGuiTableFlags_RowBg | ImGuiTableFlags_Borders)) {
-            ImGui::TableSetupColumn("ID", ImGuiTableColumnFlags_WidthFixed, 40.0f);
-            ImGui::TableSetupColumn("Категория", ImGuiTableColumnFlags_WidthStretch);
-            ImGui::TableSetupColumn("Позиций", ImGuiTableColumnFlags_WidthFixed, 80.0f);
-            ImGui::TableSetupColumn("Сумма", ImGuiTableColumnFlags_WidthFixed, 120.0f);
-            ImGui::TableHeadersRow();
-            int rowId = 1;
-            for (const auto& entry : byCategory) {
-                ImGui::TableNextRow();
-                ImGui::PushID(rowId);
-                ImGui::TableNextColumn();
-                ImGui::Text("%d", rowId);
-                ImGui::TableNextColumn();
-                ImGui::Text("%s", entry.first.c_str());
-                ImGui::TableNextColumn();
-                ImGui::Text("%d", entry.second.first);
-                ImGui::TableNextColumn();
-                ImGui::Text("%s", FormatAmount(entry.second.second).c_str());
-                ImGui::PopID();
-                ++rowId;
-            }
-            ImGui::EndTable();
+        ImGui::SetNextItemWidth(220.0f);
+        auto catGetter = [](void* data, int idx) -> const char* {
+            return (*reinterpret_cast<std::vector<std::string>*>(data))[idx].c_str();
+        };
+        if (ImGui::Combo(ICON_FA_TAGS "  Категория", &catIndex, catGetter, &catNames,
+                         static_cast<int>(catNames.size()))) {
+            categoryFilter = catIndex > 0 ? catNames[static_cast<size_t>(catIndex)] : std::string();
         }
 
         ImGui::Separator();
-        ImGui::Text(ICON_FA_FILE_LINES "  Реестр помеченных позиций (топ-50)");
-        std::vector<ItemRecord> flaggedItems;
-        for (const ItemRecord& rec : items) {
-            if (!rec.ruleCode.empty()) flaggedItems.push_back(rec);
+        ImGui::Text(ICON_FA_GAVEL "  Правила прогона (%zu)", ruleCodes.size());
+        if (ruleCodes.empty()) {
+            ImGui::TextDisabled("Ни одно правило не сработало в этом прогоне.");
+        } else {
+            std::unordered_map<std::string, int> ruleCount;
+            std::unordered_map<std::string, double> ruleAmount;
+            std::unordered_map<std::string, std::string> ruleCategory;
+            for (const Flag& flag : flags) {
+                ++ruleCount[flag.ruleCode];
+                ruleAmount[flag.ruleCode] += flag.amount;
+                if (ruleCategory[flag.ruleCode].empty()) ruleCategory[flag.ruleCode] = flag.category;
+            }
+
+            ImGui::PushStyleVar(ImGuiStyleVar_FramePadding, ImVec2(6.0f, 6.0f));
+            if (ImGui::BeginTable("report_rules", 5,
+                                  ImGuiTableFlags_RowBg | ImGuiTableFlags_Borders |
+                                  ImGuiTableFlags_SizingStretchProp)) {
+                ImGui::TableSetupColumn("Правило", ImGuiTableColumnFlags_WidthFixed, 90.0f);
+                ImGui::TableSetupColumn("Категория", ImGuiTableColumnFlags_WidthStretch);
+                ImGui::TableSetupColumn("Позиций", ImGuiTableColumnFlags_WidthFixed, 70.0f);
+                ImGui::TableSetupColumn("Сумма", ImGuiTableColumnFlags_WidthFixed, 110.0f);
+                ImGui::TableHeadersRow();
+                for (size_t i = 0; i < ruleCodes.size(); ++i) {
+                    const std::string& code = ruleCodes[i];
+                    ImGui::TableNextRow();
+                    ImGui::PushID(static_cast<int>(i));
+                    ImGui::TableNextColumn();
+                    bool selected = ruleSelected.empty() || ruleSelected[i] != 0;
+                    if (ImGui::Checkbox(code.c_str(), &selected)) {
+                        ruleSelected[i] = selected ? 1 : 0;
+                    }
+                    ImGui::TableNextColumn();
+                    auto it = categoryColor.find(ruleCategory[code]);
+                    ImVec4 color = it != categoryColor.end() ? it->second : ImVec4(1.0f, 1.0f, 1.0f, 1.0f);
+                    ImGui::TextColored(color, "%s", ruleCategory[code].c_str());
+                    ImGui::TableNextColumn();
+                    ImGui::Text("%d", ruleCount.count(code) ? ruleCount[code] : 0);
+                    ImGui::TableNextColumn();
+                    ImGui::Text("%s", FormatAmount(ruleAmount[code]).c_str());
+                    ImGui::PopID();
+                }
+                ImGui::EndTable();
+            }
+            ImGui::PopStyleVar();
+
+            if (ImGui::Button(ICON_FA_CHECK "  Все правила")) {
+                ruleSelected.assign(ruleCodes.size(), 1);
+            }
+            ImGui::SameLine();
+            if (ImGui::Button(ICON_FA_XMARK "  Снять выбор")) {
+                ruleSelected.assign(ruleCodes.size(), 0);
+            }
+            ImGui::TextDisabled("Строка попадает в выборку, если хотя бы одно её правило отмечено.");
         }
-        std::sort(flaggedItems.begin(), flaggedItems.end(), [](const ItemRecord& a, const ItemRecord& b) {
-            return a.item.closeDebit - a.item.closeCredit > b.item.closeDebit - b.item.closeCredit;
-        });
-        if (ImGui::BeginTable("report_registry", 6, ImGuiTableFlags_RowBg | ImGuiTableFlags_Borders)) {
+
+        std::vector<ItemRecord> rows = FilteredRows();
+        std::vector<Flag> filteredFlags = FilteredFlags();
+        ImGui::TextDisabled("Фильтр: %s · в выборке: %zu позиций · отметок: %zu",
+                            FilterLabel().c_str(), rows.size(), filteredFlags.size());
+
+        std::map<std::string, std::pair<int, double>> byCategory;
+        for (const Flag& flag : filteredFlags) {
+            byCategory[flag.category].first += 1;
+            byCategory[flag.category].second += flag.amount;
+        }
+        if (!byCategory.empty()) {
+            if (ImGui::BeginTable("report_categories", 4, ImGuiTableFlags_RowBg | ImGuiTableFlags_Borders)) {
+                ImGui::TableSetupColumn("ID", ImGuiTableColumnFlags_WidthFixed, 40.0f);
+                ImGui::TableSetupColumn("Категория", ImGuiTableColumnFlags_WidthStretch);
+                ImGui::TableSetupColumn("Позиций", ImGuiTableColumnFlags_WidthFixed, 80.0f);
+                ImGui::TableSetupColumn("Сумма", ImGuiTableColumnFlags_WidthFixed, 120.0f);
+                ImGui::TableHeadersRow();
+                int rowId = 1;
+                for (const auto& entry : byCategory) {
+                    ImGui::TableNextRow();
+                    ImGui::PushID(rowId);
+                    auto it = categoryColor.find(entry.first);
+                    if (it != categoryColor.end()) {
+                        ImGui::TableSetBgColor(ImGuiTableBgTarget_RowBg0,
+                                              IM_COL32(static_cast<int>(it->second.x * 255),
+                                                      static_cast<int>(it->second.y * 255),
+                                                      static_cast<int>(it->second.z * 255), 90));
+                    }
+                    ImGui::TableNextColumn();
+                    ImGui::Text("%d", rowId);
+                    ImGui::TableNextColumn();
+                    if (it != categoryColor.end()) ImGui::TextColored(it->second, "%s", entry.first.c_str());
+                    else ImGui::Text("%s", entry.first.c_str());
+                    ImGui::TableNextColumn();
+                    ImGui::Text("%d", entry.second.first);
+                    ImGui::TableNextColumn();
+                    ImGui::Text("%s", FormatAmount(entry.second.second).c_str());
+                    ImGui::PopID();
+                    ++rowId;
+                }
+                ImGui::EndTable();
+            }
+        }
+
+        ImGui::Separator();
+        const char* limits[] = {"50", "100", "200", "500", "все"};
+        int limitIndex = 2;
+        if (rowLimit == 50) limitIndex = 0;
+        else if (rowLimit == 100) limitIndex = 1;
+        else if (rowLimit == 500) limitIndex = 3;
+        else if (rowLimit < 0) limitIndex = 4;
+        ImGui::SetNextItemWidth(120.0f);
+        if (ImGui::Combo("Показывать строк", &limitIndex, limits, 5)) {
+            rowLimit = limitIndex == 4 ? -1 : std::atoi(limits[limitIndex]);
+        }
+
+        ImGui::Text(ICON_FA_FILE_LINES "  Реестр позиций по фильтру");
+        size_t shownRows = rowLimit < 0 ? rows.size()
+                                        : std::min<size_t>(static_cast<size_t>(rowLimit), rows.size());
+        if (ImGui::BeginTable("report_registry", 9,
+                              ImGuiTableFlags_RowBg | ImGuiTableFlags_Borders |
+                              ImGuiTableFlags_Resizable | ImGuiTableFlags_SizingStretchProp)) {
             ImGui::TableSetupColumn("ID", ImGuiTableColumnFlags_WidthFixed, 40.0f);
             ImGui::TableSetupColumn("Стр.", ImGuiTableColumnFlags_WidthFixed, 50.0f);
             ImGui::TableSetupColumn("Номенклатура", ImGuiTableColumnFlags_WidthStretch);
             ImGui::TableSetupColumn("Субсчёт", ImGuiTableColumnFlags_WidthFixed, 70.0f);
             ImGui::TableSetupColumn("Остаток", ImGuiTableColumnFlags_WidthFixed, 110.0f);
             ImGui::TableSetupColumn("Правило", ImGuiTableColumnFlags_WidthFixed, 80.0f);
+            ImGui::TableSetupColumn("Категория", ImGuiTableColumnFlags_WidthFixed, 110.0f);
+            ImGui::TableSetupColumn("Сумма", ImGuiTableColumnFlags_WidthFixed, 100.0f);
+            ImGui::TableSetupColumn("Основание", ImGuiTableColumnFlags_WidthStretch);
             ImGui::TableHeadersRow();
-            for (size_t i = 0; i < std::min<size_t>(50, flaggedItems.size()); ++i) {
-                const ItemRecord& rec = flaggedItems[i];
+
+            std::unordered_map<int64_t, double> amountByItem;
+            std::unordered_map<int64_t, std::string> rationaleByItem;
+            std::unordered_map<int64_t, std::string> rulesByItem;
+            for (const Flag& flag : filteredFlags) {
+                amountByItem[flag.itemId] += flag.amount;
+                if (!rationaleByItem.count(flag.itemId)) rationaleByItem[flag.itemId] = flag.rationale;
+                if (!rulesByItem[flag.itemId].empty()) rulesByItem[flag.itemId] += ", ";
+                rulesByItem[flag.itemId] += flag.ruleCode;
+            }
+
+            for (size_t i = 0; i < shownRows; ++i) {
+                const ItemRecord& rec = rows[i];
                 ImGui::TableNextRow();
                 ImGui::PushID(static_cast<int>(rec.id));
+                auto it = categoryColor.find(rec.category);
+                if (!rec.item.arithOk) {
+                    ImGui::TableSetBgColor(ImGuiTableBgTarget_RowBg0, IM_COL32(255, 89, 89, 90));
+                } else if (it != categoryColor.end()) {
+                    ImGui::TableSetBgColor(ImGuiTableBgTarget_RowBg0,
+                                          IM_COL32(static_cast<int>(it->second.x * 255),
+                                                   static_cast<int>(it->second.y * 255),
+                                                   static_cast<int>(it->second.z * 255), 90));
+                }
                 ImGui::TableNextColumn();
                 ImGui::Text("%lld", static_cast<long long>(rec.id));
                 ImGui::TableNextColumn();
@@ -278,22 +545,33 @@ void ReportView::Render() {
                 ImGui::TableNextColumn();
                 ImGui::Text("%s", rec.subaccount.c_str());
                 ImGui::TableNextColumn();
-                ImGui::Text("%s", FormatAmount(rec.item.closeDebit - rec.item.closeCredit).c_str());
+                ImGui::Text("%s", FormatAmount(CloseBalance(rec)).c_str());
                 ImGui::TableNextColumn();
-                ImGui::Text("%s", rec.ruleCode.c_str());
+                const std::string codes = rulesByItem.count(rec.id) ? rulesByItem[rec.id] : rec.ruleCode;
+                if (it != categoryColor.end()) ImGui::TextColored(it->second, "%s", codes.c_str());
+                else ImGui::Text("%s", codes.c_str());
+                ImGui::TableNextColumn();
+                if (it != categoryColor.end()) ImGui::TextColored(it->second, "%s", rec.category.c_str());
+                else ImGui::Text("%s", rec.category.c_str());
+                ImGui::TableNextColumn();
+                ImGui::Text("%s", FormatAmount(amountByItem[rec.id]).c_str());
+                ImGui::TableNextColumn();
+                ImGui::TextWrapped("%s", rationaleByItem[rec.id].c_str());
                 ImGui::PopID();
             }
             ImGui::EndTable();
         }
+        ImGui::TextDisabled("Показано %zu из %zu. Легенда: фон строки = цвет категории, "
+                            "красный — арифметика не сходится.", shownRows, rows.size());
 
         ImGui::Separator();
-        if (ImGui::Button(ICON_FA_DOWNLOAD "  Экспорт CSV")) {
+        if (ImGui::Button(ICON_FA_DOWNLOAD "  Экспорт CSV (по фильтру)")) {
             std::string path = ExportCsv();
             if (path.empty()) app->ShowError("Не удалось записать CSV");
             else app->SetStatus("CSV сохранён: " + path);
         }
         ImGui::SameLine();
-        if (ImGui::Button(ICON_FA_FILE_LINES "  HTML-сводка")) {
+        if (ImGui::Button(ICON_FA_FILE_LINES "  HTML-сводка (по фильтру)")) {
             std::string path = ExportHtml();
             if (path.empty()) app->ShowError("Не удалось записать HTML");
             else {

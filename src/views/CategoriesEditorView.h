@@ -21,7 +21,6 @@ private:
     Category draft;
 
     std::string search;
-    bool activeOnly = false;
 
     int page = 0;
     int pageSize = 100;
@@ -37,7 +36,10 @@ private:
     void AddDraft();
     void DeleteSelected();
 
+    void DeleteFilteredCategories();
+
     void RenderFilters();
+    void RenderBulkOperations();
     void RenderToolbar();
     void RenderTable();
     void RenderForm();

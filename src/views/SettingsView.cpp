@@ -76,9 +76,9 @@ void SettingsView::Render() {
         if (ImGui::Button(ICON_FA_UPLOAD "  Импорт пакета")) {
             IGFD::FileDialogConfig config;
             config.path = AppDataDir();
-            ImGuiFileDialog::Instance()->OpenDialog("RefsBundle", "Импорт пакета справочников",
-                                                   "Пакет{.json}", config);
+            app->OpenFileDialog("RefsBundle", "Импорт пакета справочников", "Пакет{.json}", config);
         }
+        app->ClaimDialog("RefsBundle");
         if (ImGuiFileDialog::Instance()->Display("RefsBundle", ImGuiWindowFlags_NoCollapse,
                                                  ImVec2(600, 400), ImVec2(900, 700))) {
             if (ImGuiFileDialog::Instance()->IsOk()) {

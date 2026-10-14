@@ -101,7 +101,7 @@ int main(int argc, char** argv) {
         const auto frameStart = std::chrono::steady_clock::now();
 
         const bool isIdle = app.views.empty() && !app.showAbout &&
-                            !app.isImporting && !app.HasError();
+                            !app.isImporting && !app.HasError() && !app.HasProgress();
         if (isIdle) {
             glfwWaitEventsTimeout(kIdleWaitTime);
         } else {
@@ -121,6 +121,7 @@ int main(int argc, char** argv) {
         HandleDbDialog(app, "NewDbDlg", false);
         HandleDbDialog(app, "OpenDbDlg", false);
         HandleDbDialog(app, "SaveDbAsDlg", true);
+        app.CloseStaleDialogs({"NewDbDlg", "OpenDbDlg", "SaveDbAsDlg"});
 
         app.RenderViews();
 

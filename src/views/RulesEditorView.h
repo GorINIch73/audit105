@@ -11,26 +11,19 @@ public:
     void Render() override;
     void RefreshData() override;
     void DuplicateDraft();
-    void SelectAllFiltered();
     void ClearFilters();
-    size_t SelectedRuleCount() const { return selectedRuleIds.size(); }
 
 private:
     std::vector<Rule> rules;
     std::vector<Category> categories;
     std::vector<Term> terms;
+    std::vector<TermList> lists;
     std::vector<Rule> filtered;
     int64_t selectedId = 0;
     int64_t highlightId = 0;
     Rule draft;
 
     std::string search;
-    int64_t categoryFilterId = 0;
-    std::string typeFilter;
-    bool activeOnly = false;
-    int severityFilter = -1;
-
-    std::vector<int64_t> selectedRuleIds;
 
     int page = 0;
     int pageSize = 100;
@@ -46,10 +39,7 @@ private:
     void SaveDraft();
     void AddDraft();
     void DeleteSelected();
-    bool IsRuleSelected(int64_t id) const;
-    void ToggleRule(int64_t id);
-    void PruneSelection();
-    void DeleteSelectedRules();
+    void DeleteFilteredRules();
 
     void RenderFilters();
     void RenderBulkOperations();

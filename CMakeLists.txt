@@ -57,6 +57,8 @@ set(APP_SOURCES
     src/domain/PositionParser.cpp
     src/domain/Utf8.cpp
     src/domain/RulesEngine.cpp
+    src/domain/RegistryImport.cpp
+    src/domain/CsvReader.cpp
     src/views/FormView.cpp
     src/views/ImportView.cpp
     src/views/RulesView.cpp
@@ -64,6 +66,7 @@ set(APP_SOURCES
     src/views/CategoriesEditorView.cpp
     src/views/TermsEditorView.cpp
     src/views/ListsEditorView.cpp
+    src/views/RegistryImportView.cpp
     src/views/ReportView.cpp
     src/views/RunsView.cpp
     src/views/CompareView.cpp
@@ -102,11 +105,13 @@ add_executable(test_db tests/test_db.cpp src/Database.cpp
     src/domain/FormatDetector.cpp
     src/domain/OdsReader.cpp
     src/domain/XlsxReader.cpp
+    src/domain/CsvReader.cpp
     src/domain/XmlReader.cpp
     src/domain/Zip.cpp
     src/domain/PositionParser.cpp
     src/domain/Utf8.cpp
     src/domain/RulesEngine.cpp
+    src/domain/RegistryImport.cpp
 )
 target_include_directories(test_db PRIVATE src src/domain)
 target_link_libraries(test_db PRIVATE SQLite3::SQLite3 ZLIB::ZLIB)
@@ -132,6 +137,22 @@ add_executable(test_rules tests/test_rules.cpp
 )
 target_include_directories(test_rules PRIVATE src src/domain)
 
+add_executable(test_registry tests/test_registry.cpp
+    src/Database.cpp
+    src/domain/FormatDetector.cpp
+    src/domain/OdsReader.cpp
+    src/domain/XlsxReader.cpp
+    src/domain/CsvReader.cpp
+    src/domain/XmlReader.cpp
+    src/domain/Zip.cpp
+    src/domain/PositionParser.cpp
+    src/domain/Utf8.cpp
+    src/domain/RulesEngine.cpp
+    src/domain/RegistryImport.cpp
+)
+target_include_directories(test_registry PRIVATE src src/domain)
+target_link_libraries(test_registry PRIVATE SQLite3::SQLite3 ZLIB::ZLIB)
+
 add_executable(test_views tests/test_views.cpp
     src/App.cpp
     src/Database.cpp
@@ -145,6 +166,8 @@ add_executable(test_views tests/test_views.cpp
     src/domain/PositionParser.cpp
     src/domain/Utf8.cpp
     src/domain/RulesEngine.cpp
+    src/domain/RegistryImport.cpp
+    src/domain/CsvReader.cpp
     src/views/FormView.cpp
     src/views/ImportView.cpp
     src/views/RulesView.cpp
@@ -152,6 +175,7 @@ add_executable(test_views tests/test_views.cpp
     src/views/CategoriesEditorView.cpp
     src/views/TermsEditorView.cpp
     src/views/ListsEditorView.cpp
+    src/views/RegistryImportView.cpp
     src/views/ReportView.cpp
     src/views/RunsView.cpp
     src/views/CompareView.cpp
@@ -160,6 +184,17 @@ add_executable(test_views tests/test_views.cpp
 target_include_directories(test_views PRIVATE src src/views src/domain ${imgui_SOURCE_DIR} ${imgui_SOURCE_DIR}/backends ${imgui_SOURCE_DIR}/misc/cpp)
 target_compile_definitions(test_views PRIVATE USE_STD_FILESYSTEM)
 target_link_libraries(test_views PRIVATE glfw SQLite3::SQLite3 ZLIB::ZLIB imgui_lib)
+
+add_executable(esklp_probe tools/esklp_probe.cpp
+    src/domain/FormatDetector.cpp
+    src/domain/XlsxReader.cpp
+    src/domain/CsvReader.cpp
+    src/domain/Zip.cpp
+    src/domain/Utf8.cpp
+    src/domain/RegistryImport.cpp
+)
+target_include_directories(esklp_probe PRIVATE src src/domain)
+target_link_libraries(esklp_probe PRIVATE ZLIB::ZLIB)
 
 
 # --- Установка ---

@@ -2,6 +2,7 @@
 
 #include "domain/PositionParser.h"
 #include "domain/RulesEngine.h"
+#include "domain/RegistryImport.h"
 
 #include <sqlite3.h>
 #include <cstdint>
@@ -153,6 +154,44 @@ struct DictImportStats {
     int conflicts = 0;
 };
 
+struct RegistrySource {
+    int64_t id = 0;
+    std::string name;
+    std::string file;
+    std::string ruleCode;
+    std::string listName;
+    std::string format;
+    std::string asOfDate;
+    std::string importedAt;
+    std::string note;
+    int rows = 0;
+    int added = 0;
+    int conflicts = 0;
+    bool active = true;
+};
+
+struct ConflictRow {
+    int64_t id = 0;
+    std::string termNorm;
+    std::string manualTerm;
+    std::string importTerm;
+    std::string ruleCode;
+    std::string listName;
+    std::string sourceDoc;
+    std::string asOfDate;
+    bool resolved = false;
+    std::string resolution;
+    std::string createdAt;
+};
+
+struct RegistryImportStats {
+    int entries = 0;
+    int added = 0;
+    int updated = 0;
+    int skipped = 0;
+    int conflicts = 0;
+};
+
 class Database {
 public:
     Database() = default;
@@ -250,6 +289,20 @@ public:
     int DeleteRulesWithoutTerms(const std::vector<int64_t>& ruleIds);
     int DeleteRules(const std::vector<int64_t>& ruleIds, int& removedTerms, int& removedFlags);
     int CountRuleFlags(int64_t ruleId);
+
+    int64_t RegisterRegistrySource(const RegistrySource& source);
+    bool ImportRegistryEntries(int64_t ruleId, const std::string& listName,
+                               const std::vector<RegistryEntry>& entries,
+                               int64_t sourceId,
+                               const std::string& sourceDoc,
+                               const std::string& asOfDate,
+                               RegistryImportStats& stats);
+    std::vector<RegistrySource> ListRegistrySources();
+    bool SetRegistrySourceActive(int64_t id, bool active);
+    bool DeleteRegistrySource(int64_t id, int& removedTerms);
+    std::vector<ConflictRow> ListConflicts(bool unresolvedOnly = false);
+    bool ResolveConflict(int64_t id, const std::string& resolution);
+    int CountUnresolvedConflicts();
 
     int ApplyRules(int64_t runId);
     int ApplyRulesInternal(int64_t runId);

@@ -1,4 +1,5 @@
 #include "RulesEditorView.h"
+#include "ListsEditorView.h"
 
 #include "../App.h"
 #include "../IconsFontAwesome6.h"
@@ -13,9 +14,7 @@
 
 namespace {
 
-const char* RuleTypeFilterNames[] = {"Все", "structural", "exact", "synonym", "term", "regex"};
 const char* RuleTypeNames[] = {"structural", "exact", "synonym", "term", "regex"};
-const char* SeverityFilterNames[] = {"Все", "0", "1", "2", "3"};
 const char* SeverityNames[] = {"0 — низкая", "1 — средняя", "2 — высокая", "3 — критичная"};
 
 int TypeIndex(const std::string& type) {
@@ -24,14 +23,6 @@ int TypeIndex(const std::string& type) {
     }
     return 0;
 }
-
-int64_t CategoryFilterId(const std::vector<int64_t>& ids, int index) {
-    if (index >= 0 && index < static_cast<int>(ids.size())) {
-        return ids[static_cast<size_t>(index)];
-    }
-    return 0;
-}
-
 
 std::vector<std::string> SplitCommaList(const std::string& text) {
     std::vector<std::string> parts;
@@ -180,8 +171,9 @@ void RenderLogicHelp(const std::vector<Rule>& rules) {
     const Group groups[] = {
         {"Недопустимо по ОМС",
          "term-правила: правило задаёт субсчёт и серьёзность, а сам список ЛС (вакцины, иммуноглобулины, АРТ при ВИЧ, "
-         "противотуберкулезные, наркология, тест-системы ВИЧ/гепатитов) хранится в «Термины и списки» и редактируется построчно. "
-         "Позиция отмечается, если её название содержит хотя бы один термин списка."},
+         "противотуберкулезные, наркология, тест-системы ВИЧ/гепатитов) живёт в справочнике «Перечни» — у каждого примера "
+         "правила есть свой перечень с описанием, источником и датой актуальности; термины правятся построчно в «Термины и списки». "
+         "Позиция отмечается, если её название содержит хотя бы один термин перечня правила."},
         {"Неверный субсчёт",
          "synonym-правила: немедицинские товары и медизделия на субсчёте лекарственных препаратов (105.31) — признак неверного субсчёта."},
         {"Кандидаты в ОС",
@@ -216,86 +208,50 @@ void RulesEditorView::RefreshData() {
     rules = app->Db().ListRules();
     categories = app->Db().ListCategories();
     terms = app->Db().ListTerms();
-    PruneSelection();
+    lists = app->Db().ListTermLists();
     RebuildFiltered();
     initialized = true;
 }
 
-bool RulesEditorView::IsRuleSelected(int64_t id) const {
-    return std::find(selectedRuleIds.begin(), selectedRuleIds.end(), id) != selectedRuleIds.end();
-}
-
-void RulesEditorView::ToggleRule(int64_t id) {
-    if (IsRuleSelected(id)) {
-        selectedRuleIds.erase(std::remove(selectedRuleIds.begin(), selectedRuleIds.end(), id),
-                             selectedRuleIds.end());
-    } else {
-        selectedRuleIds.push_back(id);
-    }
-}
-
-void RulesEditorView::PruneSelection() {
-    std::vector<int64_t> kept;
-    for (int64_t id : selectedRuleIds) {
-        for (const Rule& rule : rules) {
-            if (rule.id == id) {
-                kept.push_back(id);
-                break;
-            }
-        }
-    }
-    selectedRuleIds = kept;
-}
-
 void RulesEditorView::ClearFilters() {
     search.clear();
-    categoryFilterId = 0;
-    typeFilter.clear();
-    activeOnly = false;
-    severityFilter = -1;
     RebuildFiltered();
 }
 
-void RulesEditorView::SelectAllFiltered() {
-    selectedRuleIds.clear();
-    for (const Rule& rule : filtered) selectedRuleIds.push_back(rule.id);
-}
-
-void RulesEditorView::DeleteSelectedRules() {
+void RulesEditorView::DeleteFilteredRules() {
     if (!app || !app->HasDatabase()) return;
-    if (selectedRuleIds.empty()) {
-        app->ShowError("Нет отмеченных правил — отметьте строки в таблице");
+    if (filtered.empty()) {
+        app->ShowError("По текущему фильтру нет правил — измените фильтр");
         return;
     }
 
     int ruleTerms = 0;
     int ruleFlags = 0;
-    for (int64_t ruleId : selectedRuleIds) {
-        ruleTerms += app->Db().CountRuleTerms(ruleId);
-        ruleFlags += app->Db().CountRuleFlags(ruleId);
+    for (const Rule& rule : filtered) {
+        ruleTerms += app->Db().CountRuleTerms(rule.id);
+        ruleFlags += app->Db().CountRuleFlags(rule.id);
     }
 
-    std::string modalId = "bulk_delete_rules_" + std::to_string(selectedRuleIds.size());
-    if (ImGui::Button((ICON_FA_TRASH "  Удалить отмеченные правила (" +
-                       std::to_string(selectedRuleIds.size()) + ")").c_str())) {
+    std::string modalId = "bulk_delete_rules_filtered_" + std::to_string(filtered.size());
+    if (ImGui::Button((ICON_FA_TRASH "  Удалить правила по фильтру (" +
+                       std::to_string(filtered.size()) + ")").c_str())) {
         ImGui::OpenPopup(modalId.c_str());
     }
-    if (ConfirmationModal(modalId, "Удалить правила",
-                          "Удалить " + std::to_string(selectedRuleIds.size()) + " правил, их термины (" +
-                          std::to_string(ruleTerms) + ") и отметки позиций (" +
-                          std::to_string(ruleFlags) + ")? После этого можно импортировать новые данные. "
-                          "Отменить это нельзя.",
-                          "Удалить", "Отмена")) {
+    if (ConfirmationModal(modalId, "Удалить правила по фильтру",
+                         "Удалить " + std::to_string(filtered.size()) + " правил, их термины (" +
+                         std::to_string(ruleTerms) + ") и отметки позиций (" +
+                         std::to_string(ruleFlags) + ")? Отменить это нельзя.",
+                         "Удалить", "Отмена")) {
+        std::vector<int64_t> ids;
+        for (const Rule& rule : filtered) ids.push_back(rule.id);
         int removedTerms = 0;
         int removedFlags = 0;
-        int removed = app->Db().DeleteRules(selectedRuleIds, removedTerms, removedFlags);
+        int removed = app->Db().DeleteRules(ids, removedTerms, removedFlags);
         if (removed > 0) {
             app->MarkRulesChanged();
-            app->SetStatus("Удалено правил: " + std::to_string(removed) +
+            app->SetStatus("Удалено правил по фильтру: " + std::to_string(removed) +
                            ", терминов: " + std::to_string(removedTerms) +
-                           ", отметок: " + std::to_string(removedFlags) +
-                           " — можно импортировать новый справочник");
-            selectedRuleIds.clear();
+                           ", отметок: " + std::to_string(removedFlags));
             selectedId = 0;
             highlightId = 0;
             RefreshData();
@@ -308,42 +264,20 @@ void RulesEditorView::DeleteSelectedRules() {
 void RulesEditorView::RenderBulkOperations() {
     if (!app || !app->HasDatabase()) return;
 
-    ImGui::Text(ICON_FA_USERS "  Групповые операции");
-    ImGui::TextDisabled("Отметьте правила в таблице — операции применяются только к отмеченным");
-    if (ImGui::Button(ICON_FA_CHECK_DOUBLE "  Отметить все по фильтру")) {
-        SelectAllFiltered();
-        app->SetStatus("Отмечено правил: " + std::to_string(selectedRuleIds.size()));
-    }
-    ImGui::SameLine();
-    if (ImGui::Button(ICON_FA_XMARK "  Снять отметки")) selectedRuleIds.clear();
-    ImGui::SameLine();
-    ImGui::TextDisabled("Отмечено: %zu", selectedRuleIds.size());
-    if (!selectedRuleIds.empty()) {
-        ImGui::SameLine();
-        DeleteSelectedRules();
-    }
-    ImGui::Separator();
+    if (!ImGui::CollapsingHeader(ICON_FA_USERS "  Групповые операции")) return;
+
+    ImGui::TextDisabled("Операции применяются ко всем правилам, прошедшим фильтр. Удаление необратимо.");
+    DeleteFilteredRules();
 }
 
 void RulesEditorView::RebuildFiltered() {
     filtered.clear();
-    const std::string needle = ToLowerUtf8(search);
 
     for (const Rule& rule : rules) {
-        if (activeOnly && !rule.active) continue;
-        if (categoryFilterId != 0 && rule.categoryId != categoryFilterId) continue;
-        if (!typeFilter.empty() && rule.type != typeFilter) continue;
-        if (severityFilter >= 0 && rule.severity != severityFilter) continue;
-
-        if (!needle.empty()) {
-            bool hit = ContainsUtf8(rule.code, needle) ||
-                       ContainsUtf8(rule.category, needle) ||
-                       ContainsUtf8(rule.pattern, needle) ||
-                       ContainsUtf8(rule.rationale, needle) ||
-                       ContainsUtf8(rule.sourceDoc, needle);
-            if (!hit) continue;
-        }
-
+        std::vector<std::string> fields = {
+            rule.code, rule.category, rule.pattern, rule.rationale, rule.sourceDoc
+        };
+        if (!MatchesFilter(search, fields)) continue;
         filtered.push_back(rule);
     }
 
@@ -469,7 +403,7 @@ void RulesEditorView::SaveDraft() {
 
 void RulesEditorView::AddDraft() {
     if (!app || !app->HasDatabase()) return;
-    int64_t id = app->Db().CreateBlankRule(categoryFilterId);
+    int64_t id = app->Db().CreateBlankRule(0);
     if (id == 0) {
         app->ShowError("Не удалось создать правило");
         return;
@@ -533,70 +467,20 @@ void RulesEditorView::DeleteSelected() {
 }
 
 void RulesEditorView::RenderFilters() {
-    std::vector<int64_t> catIds;
-    std::vector<std::string> catNames;
-    for (const Category& cat : categories) {
-        catIds.push_back(cat.id);
-        catNames.push_back(cat.name);
+    ImGui::Text(ICON_FA_FILTER "  Фильтр");
+    ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(0.7f, 0.7f, 0.7f, 1.0f));
+    ImGui::TextDisabled("Фразы через запятую — И; внутри фразы поиск по всем полям — ИЛИ");
+    ImGui::PopStyleColor();
+    ImGui::PushStyleColor(ImGuiCol_FrameBg, ImVec4(0.16f, 0.24f, 0.32f, 1.0f));
+    ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(0.92f, 0.95f, 1.0f, 1.0f));
+    ImGui::InputText("##rules_filter", &search, ImGuiInputTextFlags_EnterReturnsTrue);
+    ImGui::PopStyleColor();
+    ImGui::PopStyleColor();
+    ImGui::SameLine();
+    if (ImGui::Button(ICON_FA_ERASER "  Очистить")) {
+        search.clear();
     }
-
-    int catIndex = -1;
-    int typeIndex = 0;
-    int sevIndex = 0;
-    std::string catText;
-    for (size_t i = 0; i < catIds.size(); ++i) {
-        if (catIds[i] == categoryFilterId) {
-            catIndex = static_cast<int>(i);
-            break;
-        }
-    }
-
-    ImGui::Text(ICON_FA_FILTER "  Фильтры");
-    if (ImGui::BeginTable("rules_filters", 3, ImGuiTableFlags_Borders)) {
-        ImGui::TableSetupColumn("Поиск", ImGuiTableColumnFlags_WidthStretch);
-        ImGui::TableSetupColumn("Параметры", ImGuiTableColumnFlags_WidthFixed, 140.0f);
-        ImGui::TableSetupColumn("Действия", ImGuiTableColumnFlags_WidthFixed, 190.0f);
-
-        ImGui::TableNextRow();
-
-        ImGui::TableNextColumn();
-        InputTextSync("Поиск", search, FitItemWidth("Поиск"));
-
-        ImGui::TableNextColumn();
-        ImGui::Checkbox("Только активные", &activeOnly);
-
-        ImGui::TableNextColumn();
-        if (ImGui::Button(ICON_FA_ERASER "  Очистить все фильтры")) {
-            search.clear();
-            activeOnly = false;
-            catIndex = -1;
-            typeIndex = 0;
-            sevIndex = 0;
-        }
-
-        ImGui::TableNextRow();
-
-        ImGui::TableNextColumn();
-        int64_t selectedCategoryId = catIndex >= 0 ? catIds[static_cast<size_t>(catIndex)] : categoryFilterId;
-        ImVec4 filterColor = CategoryColor(selectedCategoryId);
-        ImGui::SetNextItemWidth(FitItemWidth("Категория"));
-        ComboWithFilter("Категория", catNames, catIndex, catText, &filterColor);
-
-        ImGui::TableNextColumn();
-        ImGui::SetNextItemWidth(FitItemWidth("Тип"));
-        ImGui::Combo("Тип", &typeIndex, RuleTypeFilterNames, 6);
-
-        ImGui::TableNextColumn();
-        ImGui::SetNextItemWidth(FitItemWidth("Серьёзность"));
-        ImGui::Combo("Серьёзность", &sevIndex, SeverityFilterNames, 5);
-
-        ImGui::EndTable();
-    }
-
-    categoryFilterId = CategoryFilterId(catIds, catIndex);
-    typeFilter = typeIndex == 0 ? std::string() : RuleTypeFilterNames[typeIndex];
-    severityFilter = sevIndex == 0 ? -1 : sevIndex - 1;
-
+    ImGui::Separator();
     RebuildFiltered();
 }
 
@@ -653,10 +537,9 @@ void RulesEditorView::RenderTable() {
     }
     ImGui::Separator();
 
-    if (ImGui::BeginTable("rules_table", 8,
+    if (ImGui::BeginTable("rules_table", 7,
                           ImGuiTableFlags_RowBg | ImGuiTableFlags_Borders |
                           ImGuiTableFlags_Resizable | ImGuiTableFlags_SizingStretchSame)) {
-        ImGui::TableSetupColumn("Выбор", ImGuiTableColumnFlags_WidthFixed, 40.0f);
         ImGui::TableSetupColumn("ID", ImGuiTableColumnFlags_WidthFixed, 40.0f);
         ImGui::TableSetupColumn("Код", ImGuiTableColumnFlags_WidthFixed, 70.0f);
         ImGui::TableSetupColumn("Категория", ImGuiTableColumnFlags_WidthStretch);
@@ -674,12 +557,6 @@ void RulesEditorView::RenderTable() {
             bool isNew = rule.id == highlightId;
             if (isNew) {
                 ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(0.20f, 0.75f, 0.35f, 1.0f));
-            }
-
-            ImGui::TableNextColumn();
-            bool checked = IsRuleSelected(rule.id);
-            if (ImGui::Checkbox("##rule_pick", &checked)) {
-                ToggleRule(rule.id);
             }
 
             ImGui::TableNextColumn();
@@ -813,7 +690,8 @@ void RulesEditorView::RenderForm() {
     } else if (draft.type == "synonym") {
         InputTextSync("Синонимы (через запятую)", body, FitItemWidth("Синонимы (через запятую)"));
     } else if (draft.type == "term") {
-        InputTextSync("Запасной список (обычно пусто)", body, FitItemWidth("Запасной список (обычно пусто)"));
+        InputTextSync("Термины в правиле (обычно пусто — они в «Перечни»)", body,
+                      FitItemWidth("Термины в правиле"));
     } else {
         InputTextSync("Регулярное выражение", body, FitItemWidth("Регулярное выражение"));
     }
@@ -832,6 +710,23 @@ void RulesEditorView::RenderForm() {
     ImGui::Checkbox("Активно", &draft.active);
 
     if (draft.type == "term") {
+        std::vector<const TermList*> ruleLists;
+        for (const TermList& list : lists) {
+            if (list.ruleId == draft.id) ruleLists.push_back(&list);
+        }
+
+        ImGui::Separator();
+        if (ruleLists.empty()) {
+            ImGui::TextDisabled("У правила нет перечня — создайте его в форме «Перечни» и добавьте термины.");
+        } else {
+            ImGui::Text(ICON_FA_LIST "  Перечни правила: %zu", ruleLists.size());
+            for (const TermList* list : ruleLists) {
+                ImGui::TextDisabled("  • «%s» — %d терминов (активных %d), источник: %s",
+                                    list->name.c_str(), list->termCount, list->activeTermCount,
+                                    list->sourceDoc.empty() ? "не указан" : list->sourceDoc.c_str());
+            }
+        }
+
         int count = 0;
         std::vector<std::string> preview;
         for (const Term& term : terms) {
@@ -840,13 +735,16 @@ void RulesEditorView::RenderForm() {
                 if (preview.size() < 20) preview.push_back(term.term);
             }
         }
-        ImGui::Separator();
-        ImGui::Text(ICON_FA_LIST "  Список терминов правила: %d", count);
+        ImGui::Text("Терминов всего: %d", count);
         for (const std::string& term : preview) {
             ImGui::TextDisabled("  • %s", term.c_str());
         }
         if (count > static_cast<int>(preview.size())) {
             ImGui::TextDisabled("  … ещё %d (см. форму «Термины и списки»)", count - static_cast<int>(preview.size()));
+        }
+        if (ImGui::Button(ICON_FA_BOOK_OPEN "  Открыть форму «Перечни»")) {
+            app->CreateView<ListsEditorView>("Перечни");
+            app->SetStatus("Форма «Перечни» открыта — там редактируются перечни правил");
         }
     }
 

@@ -30,6 +30,7 @@ struct Term {
     std::string listName;
     std::string sourceDoc;
     std::string asOfDate;
+    int confidence = 0;  // 3 = АТХ/ОКПД2, 2 = ФТГ, 1 = текстовая маска, 0 = вручную
     bool active = true;
 };
 

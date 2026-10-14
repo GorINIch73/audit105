@@ -200,3 +200,33 @@ bool ContainsUtf8(const std::string& haystack, const std::string& needle) {
 bool EqualsUtf8Insensitive(const std::string& a, const std::string& b) {
     return NormalizeTextUtf8(a) == NormalizeTextUtf8(b);
 }
+
+bool MatchesFilter(const std::string& filter, const std::vector<std::string>& fields) {
+    if (filter.empty()) return true;
+    std::vector<std::string> phrases;
+    std::string phrase;
+    for (char c : filter) {
+        if (c == ',') {
+            std::string trimmed = TrimUtf8(phrase);
+            if (!trimmed.empty()) phrases.push_back(std::move(trimmed));
+            phrase.clear();
+        } else {
+            phrase.push_back(c);
+        }
+    }
+    std::string trimmed = TrimUtf8(phrase);
+    if (!trimmed.empty()) phrases.push_back(std::move(trimmed));
+    if (phrases.empty()) return true;
+
+    for (const std::string& p : phrases) {
+        bool hit = false;
+        for (const std::string& field : fields) {
+            if (ContainsUtf8(field, p)) {
+                hit = true;
+                break;
+            }
+        }
+        if (!hit) return false;
+    }
+    return true;
+}

@@ -46,6 +46,7 @@ InputFormat DetectFormat(const std::string& path) {
     if (ext == "xlsx" || ext == "xlsm") return InputFormat::Xlsx;
     if (ext == "xls") return InputFormat::Xls;
     if (ext == "xml") return InputFormat::Xml;
+    if (ext == "csv" || ext == "tsv") return InputFormat::Csv;
     return InputFormat::Unknown;
 }
 
@@ -55,6 +56,7 @@ const char* FormatName(InputFormat format) {
         case InputFormat::Xlsx: return "XLSX";
         case InputFormat::Xml: return "XML";
         case InputFormat::Xls: return "XLS";
+        case InputFormat::Csv: return "CSV";
         default: return "неизвестен";
     }
 }

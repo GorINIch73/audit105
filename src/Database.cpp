@@ -225,6 +225,14 @@ struct SeedTerm {
     const char* sourceDoc;
 };
 
+struct SeedTermList {
+    const char* ruleCode;
+    const char* name;
+    const char* description;
+    const char* sourceDoc;
+    const char* asOfDate;
+};
+
 // Примеры правил, которые добавляются при создании новой базы.
 // Логика: structural/exact ловят технику ведения счёта, term — перечни МЗ (не ОМС),
 // synonym — неверный субсчёт, synonym/regex/structural — кандидаты в основные средства (ОС).
@@ -329,6 +337,26 @@ const SeedTerm kSeedTerms[] = {
     {"OMS05", "гепатит", "global", "manual", "МЗ: тест-системы ВИЧ/гепатиты", "Пример перечня МЗ"},
     {"OMS05", "тест-система", "global", "manual", "МЗ: тест-системы ВИЧ/гепатиты", "Пример перечня МЗ"},
     {"OMS05", "иммунофермент", "global", "manual", "МЗ: тест-системы ВИЧ/гепатиты", "Пример перечня МЗ"},
+};
+
+// Перечни для term-правил: у каждого примера правила есть свой перечень
+// с описанием, источником и датой актуальности (форма «Перечни»).
+const SeedTermList kSeedTermLists[] = {
+    {"OMS01", "МЗ: вакцины и иммуноглобулины",
+     "Вакцины, анатоксины, иммуноглобулины и сыворотки — закупает МЗ, ОМС не оплачивает",
+     "Пример перечня МЗ (сверить с планом финансирования)", "2026-01-01"},
+    {"OMS02", "МЗ: АРТ при ВИЧ",
+     "Антиретровирусные препараты — федеральная программа МЗ",
+     "Пример перечня МЗ (сверить с планом финансирования)", "2026-01-01"},
+    {"OMS03", "МЗ: противотуберкулезные ЛС",
+     "Препараты лечения туберкулёза — федеральная программа МЗ",
+     "Пример перечня МЗ (сверить с планом финансирования)", "2026-01-01"},
+    {"OMS04", "МЗ: наркология",
+     "Препараты кодирования и заместительной терапии — вне ОМС",
+     "Пример перечня МЗ (сверить с планом финансирования)", "2026-01-01"},
+    {"OMS05", "МЗ: тест-системы ВИЧ/гепатиты",
+     "Тест-системы и ИВД для скрининга — федеральный бюджет",
+     "Пример перечня МЗ (сверить с планом финансирования)", "2026-01-01"},
 };
 
 const char* kSchema = R"sql(
@@ -634,6 +662,18 @@ bool MigrateTermLists(sqlite3* db) {
     return true;
 }
 
+// Перечни, которые появились из терминов, но не имеют строки в term_lists
+// (базы, созданные до появления справочника перечней).
+bool BackfillTermLists(sqlite3* db) {
+    if (!db) return false;
+    return ExecSql(db, "INSERT OR IGNORE INTO term_lists(rule_id, name, source_doc, as_of_date, "
+                       "active, sort_order, created_at, updated_at) "
+                       "SELECT rule_id, COALESCE(list_name,''), MIN(source_doc), MIN(as_of_date), 1, 0, "
+                       "COALESCE(MIN(created_at),''), COALESCE(MAX(updated_at),'') "
+                       "FROM terms WHERE COALESCE(list_name,'') <> '' "
+                       "GROUP BY rule_id, COALESCE(list_name,'')");
+}
+
 }  // namespace
 
 Database::~Database() {
@@ -681,6 +721,7 @@ bool Database::EnsureSchema() {
 
     if (!MigrateToIdRelations(db)) return false;
     if (!MigrateTermLists(db)) return false;
+    if (!BackfillTermLists(db)) return false;
 
     // Один и тот же термин может жить в нескольких перечнях одного scope,
     // поэтому уникальный индекс стал мягче: (term_norm, scope, list_name).
@@ -741,6 +782,36 @@ bool Database::EnsureSchema() {
             sqlite3_free(err);
             return false;
         }
+    }
+
+    const struct ColumnMigration {
+        const char* table;
+        const char* column;
+        const char* type;
+    } kRegistryColumns[] = {
+        {"terms", "source_id", "INTEGER REFERENCES sources(id) ON DELETE SET NULL"},
+        {"sources", "rule_id", "INTEGER REFERENCES rules(id) ON DELETE SET NULL"},
+        {"sources", "list_name", "TEXT"},
+        {"sources", "format", "TEXT"},
+        {"sources", "added", "INTEGER DEFAULT 0"},
+        {"sources", "conflicts", "INTEGER DEFAULT 0"},
+        {"sources", "note", "TEXT"},
+        {"conflicts", "import_term", "TEXT"},
+        {"conflicts", "rule_id", "INTEGER REFERENCES rules(id) ON DELETE SET NULL"},
+        {"conflicts", "list_name", "TEXT"},
+        {"conflicts", "source_doc", "TEXT"},
+        {"conflicts", "as_of_date", "TEXT"},
+        {"terms", "confidence", "INTEGER DEFAULT 0"},
+    };
+    for (const auto& column : kRegistryColumns) {
+        if (HasColumn(db, column.table, column.column)) continue;
+        std::string sql = "ALTER TABLE ";
+        sql += column.table;
+        sql += " ADD COLUMN ";
+        sql += column.column;
+        sql += " ";
+        sql += column.type;
+        if (!ExecSql(db, sql)) return false;
     }
 
     return true;
@@ -893,6 +964,29 @@ bool Database::SeedExampleRules() {
     }
     while (sqlite3_step(st) == SQLITE_ROW) {
         ruleIds[ColumnText(st, 1)] = sqlite3_column_int64(st, 0);
+    }
+    sqlite3_finalize(st);
+
+    if (sqlite3_prepare_v2(db,
+            "INSERT OR IGNORE INTO term_lists(rule_id, name, description, source_doc, as_of_date, active, sort_order, created_at, updated_at) "
+            "VALUES(?,?,?,?,?,?,1,?,?)", -1, &st, nullptr) != SQLITE_OK) {
+        Rollback();
+        return false;
+    }
+    int listSort = 1;
+    for (const auto& l : kSeedTermLists) {
+        auto it = ruleIds.find(l.ruleCode);
+        if (it == ruleIds.end()) continue;
+        sqlite3_bind_int64(st, 1, it->second);
+        sqlite3_bind_text(st, 2, l.name, -1, SQLITE_STATIC);
+        sqlite3_bind_text(st, 3, l.description, -1, SQLITE_STATIC);
+        sqlite3_bind_text(st, 4, l.sourceDoc, -1, SQLITE_STATIC);
+        sqlite3_bind_text(st, 5, l.asOfDate, -1, SQLITE_STATIC);
+        sqlite3_bind_int(st, 6, listSort++);
+        sqlite3_bind_text(st, 7, NowIso().c_str(), -1, SQLITE_STATIC);
+        sqlite3_bind_text(st, 8, NowIso().c_str(), -1, SQLITE_STATIC);
+        sqlite3_step(st);
+        sqlite3_reset(st);
     }
     sqlite3_finalize(st);
 
@@ -1866,7 +1960,7 @@ std::vector<Term> Database::ListTerms() {
     sqlite3_stmt* st = nullptr;
     if (sqlite3_prepare_v2(db,
             "SELECT t.id, t.rule_id, COALESCE(r.code,''), t.term, t.term_norm, t.scope, t.origin, "
-            "t.list_name, t.source_doc, t.as_of_date, t.active "
+            "t.list_name, t.source_doc, t.as_of_date, t.active, COALESCE(t.confidence,0) "
             "FROM terms t LEFT JOIN rules r ON r.id = t.rule_id "
             "ORDER BY t.term_norm", -1, &st, nullptr) != SQLITE_OK) {
         return out;
@@ -1884,6 +1978,7 @@ std::vector<Term> Database::ListTerms() {
         term.sourceDoc = ColumnText(st, 8);
         term.asOfDate = ColumnText(st, 9);
         term.active = sqlite3_column_int(st, 10) != 0;
+        term.confidence = sqlite3_column_int(st, 11);
         out.push_back(std::move(term));
     }
     sqlite3_finalize(st);
@@ -1909,8 +2004,8 @@ bool Database::AddTerm(const Term& term) {
     if (!copy.listName.empty()) EnsureTermList(copy.ruleId, copy.listName);
     sqlite3_stmt* st = nullptr;
     if (sqlite3_prepare_v2(db,
-            "INSERT INTO terms(rule_id, term, term_norm, scope, origin, list_name, source_doc, as_of_date, active, created_at, updated_at) "
-            "VALUES(?,?,?,?,?,?,?,?,?,?,?)", -1, &st, nullptr) != SQLITE_OK) {
+            "INSERT INTO terms(rule_id, term, term_norm, scope, origin, list_name, source_doc, as_of_date, active, created_at, updated_at, confidence) "
+            "VALUES(?,?,?,?,?,?,?,?,?,?,?,?)", -1, &st, nullptr) != SQLITE_OK) {
         return false;
     }
     if (copy.ruleId == 0) {
@@ -1928,6 +2023,7 @@ bool Database::AddTerm(const Term& term) {
     sqlite3_bind_int(st, 9, copy.active ? 1 : 0);
     sqlite3_bind_text(st, 10, NowCompact().c_str(), -1, SQLITE_TRANSIENT);
     sqlite3_bind_text(st, 11, NowCompact().c_str(), -1, SQLITE_TRANSIENT);
+    sqlite3_bind_int(st, 12, copy.confidence);
     bool ok = sqlite3_step(st) == SQLITE_DONE && sqlite3_changes(db) > 0;
     sqlite3_finalize(st);
     return ok;
@@ -1952,7 +2048,7 @@ bool Database::UpdateTerm(const Term& term) {
     if (!copy.listName.empty()) EnsureTermList(copy.ruleId, copy.listName);
     sqlite3_stmt* st = nullptr;
     if (sqlite3_prepare_v2(db,
-            "UPDATE terms SET rule_id=?, term=?, term_norm=?, scope=?, origin=?, list_name=?, source_doc=?, as_of_date=?, active=?, updated_at=? "
+            "UPDATE terms SET rule_id=?, term=?, term_norm=?, scope=?, origin=?, list_name=?, source_doc=?, as_of_date=?, active=?, updated_at=?, confidence=? "
             "WHERE id=?", -1, &st, nullptr) != SQLITE_OK) {
         return false;
     }
@@ -1970,7 +2066,8 @@ bool Database::UpdateTerm(const Term& term) {
     sqlite3_bind_text(st, 8, copy.asOfDate.c_str(), -1, SQLITE_TRANSIENT);
     sqlite3_bind_int(st, 9, copy.active ? 1 : 0);
     sqlite3_bind_text(st, 10, NowCompact().c_str(), -1, SQLITE_TRANSIENT);
-    sqlite3_bind_int64(st, 11, copy.id);
+    sqlite3_bind_int(st, 11, copy.confidence);
+    sqlite3_bind_int64(st, 12, copy.id);
     bool ok = sqlite3_step(st) == SQLITE_DONE && sqlite3_changes(db) > 0;
     sqlite3_finalize(st);
     return ok;
@@ -1991,7 +2088,8 @@ bool Database::GetTerm(int64_t id, Term& out) {
     if (sqlite3_prepare_v2(db,
             "SELECT t.id, COALESCE(t.rule_id,0), COALESCE(r.code,''), t.term, t.term_norm, "
             "COALESCE(t.scope,'local'), COALESCE(t.origin,'manual'), COALESCE(t.list_name,''), "
-            "COALESCE(t.source_doc,''), COALESCE(t.as_of_date,''), COALESCE(t.active,1) "
+            "COALESCE(t.source_doc,''), COALESCE(t.as_of_date,''), COALESCE(t.active,1), "
+            "COALESCE(t.confidence,0) "
             "FROM terms t LEFT JOIN rules r ON r.id = t.rule_id WHERE t.id=?",
             -1, &st, nullptr) != SQLITE_OK) {
         return false;
@@ -2011,6 +2109,7 @@ bool Database::GetTerm(int64_t id, Term& out) {
         out.sourceDoc = ColumnText(st, 8);
         out.asOfDate = ColumnText(st, 9);
         out.active = sqlite3_column_int(st, 10) != 0;
+        out.confidence = sqlite3_column_int(st, 11);
     }
     sqlite3_finalize(st);
     return found;
@@ -2560,6 +2659,319 @@ int Database::AddTermsToList(int64_t ruleId, const std::string& listName,
     return added;
 }
 
+int64_t Database::RegisterRegistrySource(const RegistrySource& source) {
+    if (!db) return 0;
+    int64_t ruleId = 0;
+    if (!source.ruleCode.empty()) {
+        sqlite3_stmt* rs = nullptr;
+        if (sqlite3_prepare_v2(db, "SELECT id FROM rules WHERE code=? COLLATE NOCASE",
+                               -1, &rs, nullptr) == SQLITE_OK) {
+            sqlite3_bind_text(rs, 1, source.ruleCode.c_str(), -1, SQLITE_TRANSIENT);
+            if (sqlite3_step(rs) == SQLITE_ROW) ruleId = sqlite3_column_int64(rs, 0);
+            sqlite3_finalize(rs);
+        }
+    }
+    sqlite3_stmt* st = nullptr;
+    if (sqlite3_prepare_v2(db,
+            "INSERT INTO sources(name, file, as_of_date, imported_at, rows, active, rule_id, list_name, "
+            "format, added, conflicts, note) VALUES(?,?,?,?,?,?,?,?,?,?,?,?)",
+            -1, &st, nullptr) != SQLITE_OK) {
+        return 0;
+    }
+    sqlite3_bind_text(st, 1, source.name.c_str(), -1, SQLITE_TRANSIENT);
+    sqlite3_bind_text(st, 2, source.file.c_str(), -1, SQLITE_TRANSIENT);
+    sqlite3_bind_text(st, 3, source.asOfDate.c_str(), -1, SQLITE_TRANSIENT);
+    sqlite3_bind_text(st, 4, NowIso().c_str(), -1, SQLITE_TRANSIENT);
+    sqlite3_bind_int(st, 5, source.rows);
+    sqlite3_bind_int(st, 6, source.active ? 1 : 0);
+    sqlite3_bind_int64(st, 7, ruleId);
+    sqlite3_bind_text(st, 8, source.listName.c_str(), -1, SQLITE_TRANSIENT);
+    sqlite3_bind_text(st, 9, source.format.c_str(), -1, SQLITE_TRANSIENT);
+    sqlite3_bind_int(st, 10, source.added);
+    sqlite3_bind_int(st, 11, source.conflicts);
+    sqlite3_bind_text(st, 12, source.note.c_str(), -1, SQLITE_TRANSIENT);
+    sqlite3_step(st);
+    sqlite3_finalize(st);
+    return sqlite3_last_insert_rowid(db);
+}
+
+bool Database::ImportRegistryEntries(int64_t ruleId, const std::string& listName,
+                                     const std::vector<RegistryEntry>& entries,
+                                     int64_t sourceId,
+                                     const std::string& sourceDoc,
+                                     const std::string& asOfDate,
+                                     RegistryImportStats& stats) {
+    if (!db || ruleId == 0) return false;
+    if (!Begin()) return false;
+    EnsureTermList(ruleId, listName);
+
+    for (const RegistryEntry& entry : entries) {
+        ++stats.entries;
+        std::vector<std::string> variants;
+        std::string main = CollapseSpacesUtf8(TrimUtf8(entry.name));
+        if (!main.empty()) variants.push_back(main);
+        for (const std::string& alt : entry.altNames) {
+            std::string value = CollapseSpacesUtf8(TrimUtf8(alt));
+            if (!value.empty()) variants.push_back(value);
+        }
+        if (variants.empty()) {
+            ++stats.skipped;
+            continue;
+        }
+
+        for (const std::string& raw : variants) {
+            std::string norm = NormalizeTextUtf8(raw);
+            if (norm.empty()) continue;
+
+            int64_t existingId = 0;
+            std::string existingOrigin;
+            sqlite3_stmt* find = nullptr;
+            if (sqlite3_prepare_v2(db,
+                    "SELECT id, COALESCE(origin,'manual') FROM terms "
+                    "WHERE term_norm=? AND active=1 LIMIT 1",
+                    -1, &find, nullptr) == SQLITE_OK) {
+                sqlite3_bind_text(find, 1, norm.c_str(), -1, SQLITE_TRANSIENT);
+                if (sqlite3_step(find) == SQLITE_ROW) {
+                    existingId = sqlite3_column_int64(find, 0);
+                    existingOrigin = ColumnText(find, 1);
+                }
+                sqlite3_finalize(find);
+            }
+
+            if (existingId != 0) {
+                if (existingOrigin == "manual") {
+                    sqlite3_stmt* dup = nullptr;
+                    bool already = false;
+                    if (sqlite3_prepare_v2(db,
+                            "SELECT 1 FROM conflicts WHERE term_norm=? AND manual_id=? LIMIT 1",
+                            -1, &dup, nullptr) == SQLITE_OK) {
+                        sqlite3_bind_text(dup, 1, norm.c_str(), -1, SQLITE_TRANSIENT);
+                        sqlite3_bind_int64(dup, 2, existingId);
+                        already = sqlite3_step(dup) == SQLITE_ROW;
+                        sqlite3_finalize(dup);
+                    }
+                    if (!already) {
+                        sqlite3_stmt* ins = nullptr;
+                        if (sqlite3_prepare_v2(db,
+                                "INSERT INTO conflicts(term_norm, manual_id, import_id, resolved, "
+                                "created_at, import_term, rule_id, list_name, source_doc, as_of_date) "
+                                "VALUES(?,?,?,0,?,?,?,?,?,?)",
+                                -1, &ins, nullptr) == SQLITE_OK) {
+                            sqlite3_bind_text(ins, 1, norm.c_str(), -1, SQLITE_TRANSIENT);
+                            sqlite3_bind_int64(ins, 2, existingId);
+                            sqlite3_bind_int64(ins, 3, existingId);
+                            sqlite3_bind_text(ins, 4, NowIso().c_str(), -1, SQLITE_TRANSIENT);
+                            sqlite3_bind_text(ins, 5, raw.c_str(), -1, SQLITE_TRANSIENT);
+                            sqlite3_bind_int64(ins, 6, ruleId);
+                            sqlite3_bind_text(ins, 7, listName.c_str(), -1, SQLITE_TRANSIENT);
+                            sqlite3_bind_text(ins, 8, sourceDoc.c_str(), -1, SQLITE_TRANSIENT);
+                            sqlite3_bind_text(ins, 9, asOfDate.c_str(), -1, SQLITE_TRANSIENT);
+                            sqlite3_step(ins);
+                            sqlite3_finalize(ins);
+                        }
+                    }
+                    ++stats.conflicts;
+                    continue;
+                }
+                sqlite3_stmt* upd = nullptr;
+                if (sqlite3_prepare_v2(db,
+                        "UPDATE terms SET source_doc=COALESCE(NULLIF(source_doc,''),?), "
+                        "as_of_date=COALESCE(NULLIF(as_of_date,''),?), "
+                        "source_id=COALESCE(source_id,?), confidence=MAX(COALESCE(confidence,0),?), "
+                        "updated_at=? WHERE id=?",
+                        -1, &upd, nullptr) == SQLITE_OK) {
+                    sqlite3_bind_text(upd, 1, sourceDoc.c_str(), -1, SQLITE_TRANSIENT);
+                    sqlite3_bind_text(upd, 2, asOfDate.c_str(), -1, SQLITE_TRANSIENT);
+                    sqlite3_bind_int64(upd, 3, sourceId);
+                    sqlite3_bind_int(upd, 4, entry.matchLevel);
+                    sqlite3_bind_text(upd, 5, NowIso().c_str(), -1, SQLITE_TRANSIENT);
+                    sqlite3_bind_int64(upd, 6, existingId);
+                    sqlite3_step(upd);
+                    sqlite3_finalize(upd);
+                }
+                ++stats.updated;
+                continue;
+            }
+
+            Term term;
+            term.ruleId = ruleId;
+            term.term = raw;
+            term.scope = "global";
+            term.origin = "import";
+            term.listName = listName;
+            term.sourceDoc = sourceDoc;
+            term.asOfDate = asOfDate;
+            term.confidence = entry.matchLevel;
+            term.active = true;
+            if (AddTerm(term)) ++stats.added;
+            else ++stats.skipped;
+        }
+    }
+
+    if (!Commit()) {
+        Rollback();
+        return false;
+    }
+
+    sqlite3_stmt* link = nullptr;
+    if (sourceId != 0 && sqlite3_prepare_v2(db,
+            "UPDATE terms SET source_id=? WHERE source_id IS NULL AND origin='import' "
+            "AND rule_id=? AND COALESCE(list_name,'')=?",
+            -1, &link, nullptr) == SQLITE_OK) {
+        sqlite3_bind_int64(link, 1, sourceId);
+        sqlite3_bind_int64(link, 2, ruleId);
+        sqlite3_bind_text(link, 3, listName.c_str(), -1, SQLITE_TRANSIENT);
+        sqlite3_step(link);
+        sqlite3_finalize(link);
+    }
+
+    sqlite3_stmt* st = nullptr;
+    if (sourceId != 0 && sqlite3_prepare_v2(db,
+            "UPDATE sources SET rows=?, added=COALESCE(added,0)+?, "
+            "conflicts=COALESCE(conflicts,0)+? WHERE id=?",
+            -1, &st, nullptr) == SQLITE_OK) {
+        sqlite3_bind_int(st, 1, stats.entries);
+        sqlite3_bind_int(st, 2, stats.added);
+        sqlite3_bind_int(st, 3, stats.conflicts);
+        sqlite3_bind_int64(st, 4, sourceId);
+        sqlite3_step(st);
+        sqlite3_finalize(st);
+    }
+    return true;
+}
+
+std::vector<RegistrySource> Database::ListRegistrySources() {
+    std::vector<RegistrySource> out;
+    if (!db) return out;
+    sqlite3_stmt* st = nullptr;
+    if (sqlite3_prepare_v2(db,
+            "SELECT s.id, COALESCE(s.name,''), COALESCE(s.file,''), COALESCE(r.code,''), "
+            "COALESCE(s.list_name,''), COALESCE(s.format,''), COALESCE(s.as_of_date,''), "
+            "COALESCE(s.imported_at,''), COALESCE(s.note,''), COALESCE(s.rows,0), "
+            "COALESCE(s.added,0), COALESCE(s.conflicts,0), COALESCE(s.active,1) "
+            "FROM sources s LEFT JOIN rules r ON r.id = s.rule_id "
+            "ORDER BY s.imported_at DESC",
+            -1, &st, nullptr) != SQLITE_OK) {
+        return out;
+    }
+    while (sqlite3_step(st) == SQLITE_ROW) {
+        RegistrySource source;
+        source.id = sqlite3_column_int64(st, 0);
+        source.name = ColumnText(st, 1);
+        source.file = ColumnText(st, 2);
+        source.ruleCode = ColumnText(st, 3);
+        source.listName = ColumnText(st, 4);
+        source.format = ColumnText(st, 5);
+        source.asOfDate = ColumnText(st, 6);
+        source.importedAt = ColumnText(st, 7);
+        source.note = ColumnText(st, 8);
+        source.rows = sqlite3_column_int(st, 9);
+        source.added = sqlite3_column_int(st, 10);
+        source.conflicts = sqlite3_column_int(st, 11);
+        source.active = sqlite3_column_int(st, 12) != 0;
+        out.push_back(std::move(source));
+    }
+    sqlite3_finalize(st);
+    return out;
+}
+
+bool Database::SetRegistrySourceActive(int64_t id, bool active) {
+    if (!db) return false;
+    sqlite3_stmt* st = nullptr;
+    if (sqlite3_prepare_v2(db, "UPDATE sources SET active=? WHERE id=?", -1, &st, nullptr) != SQLITE_OK) {
+        return false;
+    }
+    sqlite3_bind_int(st, 1, active ? 1 : 0);
+    sqlite3_bind_int64(st, 2, id);
+    bool ok = sqlite3_step(st) == SQLITE_DONE;
+    sqlite3_finalize(st);
+    return ok;
+}
+
+bool Database::DeleteRegistrySource(int64_t id, int& removedTerms) {
+    removedTerms = 0;
+    if (!db) return false;
+    if (!Begin()) return false;
+    sqlite3_stmt* st = nullptr;
+    if (sqlite3_prepare_v2(db, "SELECT COUNT(*) FROM terms WHERE source_id=?", -1, &st, nullptr) == SQLITE_OK) {
+        sqlite3_bind_int64(st, 1, id);
+        if (sqlite3_step(st) == SQLITE_ROW) removedTerms = sqlite3_column_int(st, 0);
+        sqlite3_finalize(st);
+    }
+    if (sqlite3_exec(db, "DELETE FROM terms WHERE source_id=?", nullptr, nullptr, nullptr) != SQLITE_OK) {
+        Rollback();
+        return false;
+    }
+    sqlite3_stmt* del = nullptr;
+    if (sqlite3_prepare_v2(db, "DELETE FROM sources WHERE id=?", -1, &del, nullptr) == SQLITE_OK) {
+        sqlite3_bind_int64(del, 1, id);
+        sqlite3_step(del);
+        sqlite3_finalize(del);
+    }
+    return Commit();
+}
+
+std::vector<ConflictRow> Database::ListConflicts(bool unresolvedOnly) {
+    std::vector<ConflictRow> out;
+    if (!db) return out;
+    std::string sql =
+        "SELECT c.id, COALESCE(c.term_norm,''), COALESCE(m.term,''), COALESCE(c.import_term,''), "
+        "COALESCE(r.code,''), COALESCE(c.list_name,''), COALESCE(c.source_doc,''), "
+        "COALESCE(c.as_of_date,''), COALESCE(c.resolved,0), COALESCE(c.resolution,''), "
+        "COALESCE(c.created_at,'') FROM conflicts c "
+        "LEFT JOIN terms m ON m.id = c.manual_id "
+        "LEFT JOIN rules r ON r.id = c.rule_id";
+    if (unresolvedOnly) sql += " WHERE COALESCE(c.resolved,0)=0";
+    sql += " ORDER BY c.created_at DESC";
+    sqlite3_stmt* st = nullptr;
+    if (sqlite3_prepare_v2(db, sql.c_str(), -1, &st, nullptr) != SQLITE_OK) return out;
+    while (sqlite3_step(st) == SQLITE_ROW) {
+        ConflictRow row;
+        row.id = sqlite3_column_int64(st, 0);
+        row.termNorm = ColumnText(st, 1);
+        row.manualTerm = ColumnText(st, 2);
+        row.importTerm = ColumnText(st, 3);
+        row.ruleCode = ColumnText(st, 4);
+        row.listName = ColumnText(st, 5);
+        row.sourceDoc = ColumnText(st, 6);
+        row.asOfDate = ColumnText(st, 7);
+        row.resolved = sqlite3_column_int(st, 8) != 0;
+        row.resolution = ColumnText(st, 9);
+        row.createdAt = ColumnText(st, 10);
+        out.push_back(std::move(row));
+    }
+    sqlite3_finalize(st);
+    return out;
+}
+
+bool Database::ResolveConflict(int64_t id, const std::string& resolution) {
+    if (!db) return false;
+    sqlite3_stmt* st = nullptr;
+    if (sqlite3_prepare_v2(db,
+            "UPDATE conflicts SET resolved=1, resolution=?, created_at=created_at WHERE id=?",
+            -1, &st, nullptr) != SQLITE_OK) {
+        return false;
+    }
+    sqlite3_bind_text(st, 1, resolution.c_str(), -1, SQLITE_TRANSIENT);
+    sqlite3_bind_int64(st, 2, id);
+    bool ok = sqlite3_step(st) == SQLITE_DONE;
+    sqlite3_finalize(st);
+    return ok;
+}
+
+int Database::CountUnresolvedConflicts() {
+    if (!db) return 0;
+    sqlite3_stmt* st = nullptr;
+    if (sqlite3_prepare_v2(db, "SELECT COUNT(*) FROM conflicts WHERE COALESCE(resolved,0)=0",
+                          -1, &st, nullptr) != SQLITE_OK) {
+        return 0;
+    }
+    int count = 0;
+    if (sqlite3_step(st) == SQLITE_ROW) count = sqlite3_column_int(st, 0);
+    sqlite3_finalize(st);
+    return count;
+}
+
 std::string Database::DuplicateTermList(int64_t ruleId, const std::string& listName,
                                         int& copied) {
     copied = 0;
@@ -2570,7 +2982,8 @@ std::string Database::DuplicateTermList(int64_t ruleId, const std::string& listN
     if (sqlite3_prepare_v2(db,
             "SELECT t.id, t.rule_id, COALESCE(r.code,''), t.term, t.term_norm, COALESCE(t.scope,'local'), "
             "COALESCE(t.origin,'manual'), COALESCE(t.list_name,''), "
-            "COALESCE(t.source_doc,''), COALESCE(t.as_of_date,''), COALESCE(t.active,1) "
+            "COALESCE(t.source_doc,''), COALESCE(t.as_of_date,''), COALESCE(t.active,1), "
+            "COALESCE(t.confidence,0) "
             "FROM terms t LEFT JOIN rules r ON r.id = t.rule_id "
             "WHERE t.rule_id=? AND COALESCE(t.list_name,'')=? ORDER BY t.term",
             -1, &st, nullptr) != SQLITE_OK) {
@@ -2591,6 +3004,7 @@ std::string Database::DuplicateTermList(int64_t ruleId, const std::string& listN
         term.sourceDoc = ColumnText(st, 8);
         term.asOfDate = ColumnText(st, 9);
         term.active = sqlite3_column_int(st, 10) != 0;
+        term.confidence = sqlite3_column_int(st, 11);
         source.push_back(std::move(term));
     }
     sqlite3_finalize(st);

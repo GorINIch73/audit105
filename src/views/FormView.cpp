@@ -197,7 +197,7 @@ void FormView::Render() {
         if (runs.empty()) RefreshData();
 
         if (runs.empty()) {
-            ImGui::TextDisabled("Нет прогонов. Импортируйте оборот (Импорт → Импорт оборота).");
+            ImGui::TextDisabled("Нет прогонов. Импортируйте оборот (Импорт → Импорт оборотов).");
             EndWindow();
             return;
         }

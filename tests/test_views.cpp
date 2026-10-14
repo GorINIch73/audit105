@@ -17,6 +17,7 @@
 #include <cstdio>
 #include <cstring>
 #include <cmath>
+#include <fstream>
 #include <utility>
 #include <string>
 
@@ -316,7 +317,7 @@ int main() {
     }
     printf("ok: lists editor duplicates the selected term list\n");
 
-    // 7а6) групповые операции: отметка по фильтру и удаление отмеченных правил
+    // 7а6) групповые операции: применяются по фильтру с подтверждением
     int64_t groupCategoryId = 0;
     for (const Category& cat : app.Db().ListCategories()) {
         if (cat.name == "Обратить внимание") {
@@ -327,28 +328,22 @@ int main() {
     int64_t groupRule = app.Db().CreateBlankRule(groupCategoryId);
     app.Db().AddTermsToList(groupRule, "Групповой перечень", {"групповой термин один"});
     rulesEditor->RefreshData();
-    rulesEditor->SelectAllFiltered();
-    if (rulesEditor->SelectedRuleCount() == 0) {
-        printf("fail: selecting all filtered rules marked nothing\n");
-        return 1;
-    }
     size_t rulesBeforeBulk = app.Db().ListRules().size();
     for (int i = 0; i < 3; ++i) Frame(app);
     if (app.Db().ListRules().size() != rulesBeforeBulk) {
         printf("fail: bulk delete removed rules without confirmation\n");
         return 1;
     }
-    printf("ok: group operations mark rules by filter (%zu marked)\n", rulesEditor->SelectedRuleCount());
+    printf("ok: group operations require confirmation before deleting rules\n");
 
     termsEditor->RefreshData();
     termsEditor->ClearFilters();
-    termsEditor->SelectAllFiltered();
-    if (termsEditor->SelectedTermCount() == 0 || termsEditor->SelectedListCount() == 0) {
-        printf("fail: group selection marked no terms or lists\n");
+    for (int i = 0; i < 3; ++i) Frame(app);
+    if (app.Db().ListTerms().empty()) {
+        printf("fail: bulk delete removed terms without confirmation\n");
         return 1;
     }
-    printf("ok: group operations mark terms and lists (%zu terms, %zu lists)\n",
-           termsEditor->SelectedTermCount(), termsEditor->SelectedListCount());
+    printf("ok: group operations require confirmation before deleting terms\n");
     for (const Term& term : app.Db().ListTerms()) {
         if (term.ruleId == groupRule) app.Db().DeleteTerm(term.id);
     }
@@ -518,6 +513,97 @@ int main() {
         return 1;
     }
     printf("ok: runs view renders\n");
+
+    // 9) отчёт: раскраска по категориям и фильтр строк по правилам (включая экспорт)
+    ReportView* report = app.CreateView<ReportView>("Отчёт проба");
+    report->RefreshData();
+    if (report->FilteredRowCount() == 0) {
+        printf("fail: report filter dropped the flagged probe item\n");
+        return 1;
+    }
+    report->SelectRules({"PROBE01"});
+    if (report->FilteredRowCount() != 1) {
+        printf("fail: rule filter kept %zu rows instead of 1\n", report->FilteredRowCount());
+        return 1;
+    }
+    report->SelectRules({"PROBE99"});
+    if (report->FilteredRowCount() != 0) {
+        printf("fail: unknown rule still matched rows\n");
+        return 1;
+    }
+    report->SelectRules({});
+    std::string csv = report->ExportCsv();
+    std::string html = report->ExportHtml();
+    if (csv.empty() || html.empty()) {
+        printf("fail: report export failed\n");
+        return 1;
+    }
+    auto readAll = [](const std::string& path) {
+        std::ifstream in(path);
+        return std::string((std::istreambuf_iterator<char>(in)), std::istreambuf_iterator<char>());
+    };
+    std::string csvText = readAll(csv);
+    std::string htmlText = readAll(html);
+    if (csvText.find("PROBE01") == std::string::npos || csvText.find("Шприц") == std::string::npos) {
+        printf("fail: CSV export does not contain the filtered row\n");
+        return 1;
+    }
+    if (htmlText.find("PROBE01") == std::string::npos || htmlText.find("background:#") == std::string::npos) {
+        printf("fail: HTML export is not colored by category\n");
+        return 1;
+    }
+    printf("ok: report filters rows by rule and exports the filtered set\n");
+
+    app.LogEvent("первое событие", LogInfo);
+    app.LogEvent("второе событие", LogWarn);
+    if (app.Events().size() < 2 || app.Events().back().text != "второе событие") {
+        printf("fail: event journal did not record events\n");
+        return 1;
+    }
+    app.LogEvent("второе событие", LogWarn);
+    int duplicates = 0;
+    for (const LogEntry& entry : app.Events()) {
+        if (entry.text == "второе событие") ++duplicates;
+    }
+    if (duplicates != 1) {
+        printf("fail: duplicate events were appended\n");
+        return 1;
+    }
+    printf("ok: event journal records and deduplicates events\n");
+
+    app.SetProgress("читаем справочник", 0.25);
+    if (!app.HasProgress()) {
+        printf("fail: progress state not set\n");
+        return 1;
+    }
+    app.ClearProgress();
+    if (app.HasProgress()) {
+        printf("fail: progress state not cleared\n");
+        return 1;
+    }
+    printf("ok: progress state is tracked\n");
+
+    ImGuiFileDialog* dialog = ImGuiFileDialog::Instance();
+    app.OpenFileDialog("RegistryFile", "справочник", ".xlsx");
+    if (!dialog->IsOpened("RegistryFile")) {
+        printf("fail: guarded open did not open the dialog\n");
+        return 1;
+    }
+    app.OpenFileDialog("ImportFile", "оборот", ".ods");
+    if (!dialog->IsOpened("ImportFile") || dialog->IsOpened("RegistryFile")) {
+        printf("fail: a stale dialog blocked the new file dialog\n");
+        return 1;
+    }
+    printf("ok: opening a second dialog replaces the stale one\n");
+
+    dialog->OpenDialog("GhostDlg", "сирой диалог", ".db");
+    Frame(app);
+    app.CloseStaleDialogs({"NewDbDlg", "OpenDbDlg", "SaveDbAsDlg"});
+    if (dialog->IsOpened("GhostDlg")) {
+        printf("fail: watchdog did not close the orphaned dialog\n");
+        return 1;
+    }
+    printf("ok: watchdog closes dialogs with no owning view\n");
 
     ImGui::DestroyContext();
     printf("test_views: OK\n");

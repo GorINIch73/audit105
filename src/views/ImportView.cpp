@@ -82,16 +82,20 @@ void ImportView::Render() {
                                     : std::filesystem::path(app->DbPath()).parent_path().string();
             IGFD::FileDialogConfig config;
             config.path = start;
-            ImGuiFileDialog::Instance()->OpenDialog("ImportFile", "Импорт оборота",
-                                                   "Оборот{.ods,.xlsx,.xls,.xml}", config);
+            app->OpenFileDialog("ImportFile", "Импорт оборота",
+                                "Оборот{.ods,.xlsx,.xls,.xml}", config);
         }
+        app->ClaimDialog("ImportFile");
 
         if (ImGuiFileDialog::Instance()->Display("ImportFile", ImGuiWindowFlags_NoCollapse,
                                                 ImVec2(600, 400), ImVec2(900, 700))) {
             if (ImGuiFileDialog::Instance()->IsOk()) {
                 path = ImGuiFileDialog::Instance()->GetFilePathName();
                 parsed = false;
+                parseAttempted = false;
                 lastError.clear();
+                app->LogEvent("Выбран файл оборота: " +
+                              std::filesystem::path(path).filename().string());
             }
             ImGuiFileDialog::Instance()->Close();
         }
@@ -105,7 +109,11 @@ void ImportView::Render() {
         std::string effectivePath = path;
         InputFormat format = DetectFormat(path);
 
-        if (!parsed) {
+        if (!parsed && !parseAttempted) {
+            parseAttempted = true;
+            app->SetProgress("Читаем файл оборота: " +
+                             std::filesystem::path(path).filename().string(), -1.0);
+
             if (format == InputFormat::Unknown) {
                 lastError = "Не удалось определить формат файла: " + path;
             } else if (NeedsConversion(format)) {
@@ -131,6 +139,11 @@ void ImportView::Render() {
                     if (period.empty()) period = GuessPeriod(std::filesystem::path(path).filename().string());
                 }
             }
+
+            app->ClearProgress();
+            app->LogEvent(parsed ? "Файл оборота прочитан: позиций " + std::to_string(report.items.size())
+                                 : "Не удалось прочитать файл оборота: " + lastError,
+                          parsed ? LogSuccess : LogError);
         }
 
         ImGui::Separator();
@@ -140,6 +153,10 @@ void ImportView::Render() {
 
         if (!parsed) {
             ImGui::TextColored(ImVec4(1.0f, 0.4f, 0.4f, 1.0f), "%s", lastError.c_str());
+            if (ImGui::Button(ICON_FA_ARROWS_ROTATE "  Повторить чтение файла")) {
+                parseAttempted = false;
+                lastError.clear();
+            }
             EndWindow();
             return;
         }

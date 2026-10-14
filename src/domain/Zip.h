@@ -19,5 +19,7 @@ bool FindCentralDirectory(const std::string& data, size_t& cdOffset, size_t& cdS
 std::vector<Entry> ReadEntries(const std::string& data, size_t cdOffset, size_t cdSize);
 bool ExtractEntry(const std::string& data, const Entry& entry, std::string& out);
 const Entry* FindEntry(const std::vector<Entry>& entries, const std::string& name);
+// Позиция сжатых байтов записи в ZIP-буфере — для построчной (streaming) распаковки.
+bool EntryRange(const std::string& data, const Entry& entry, size_t& from, size_t& length);
 
 }  // namespace zip

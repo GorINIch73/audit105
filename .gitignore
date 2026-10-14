@@ -1,7 +1,30 @@
+# Сборка
 build/
+*.o
+*.tmp
+imgui.ini
+
+# Базы данных
 *.db
 *.db-wal
 *.db-shm
-imgui.ini
-*.o
-*.tmp
+
+# Загруженные и тестовые данные (не часть проекта)
+esklp/
+refs/
+*.ods
+*.xlsx
+*.xls
+*.xlsb
+*.xlsm
+*.xml
+*.csv
+*.zip
+*.pdf
+*.docx
+*.odt
+*.fods
+
+# Маленькие эталонные файлы тестов остаются в репозитории
+!tests/fixtures/*.ods
+!tests/fixtures/*.xlsx
