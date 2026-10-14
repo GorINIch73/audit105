@@ -204,7 +204,8 @@ std::string ReportView::ExportCsv() {
 
     out << "# Прогон #" << run.id << " | " << run.file << " | период: " << run.period
         << " | фильтр: " << FilterLabel() << " | строк: " << rows.size() << "\n";
-    out << "row,name,subaccount,opening,debit,credit,closing,qty_close,unit_price,rule,category,severity,amount,rationale\n";
+    out << "row,name,subaccount,opening,debit,credit,closing,qty_debit,qty_close,purchase_price,"
+        << "unit_price,rule,category,severity,amount,rationale\n";
 
     std::unordered_map<int64_t, std::vector<Flag>> byItem;
     for (const Flag& flag : filteredFlags) byItem[flag.itemId].push_back(flag);
@@ -214,14 +215,16 @@ std::string ReportView::ExportCsv() {
         if (it == byItem.end()) {
             out << rec.item.rowNo << "," << CsvEscape(rec.item.nameRaw) << "," << CsvEscape(rec.subaccount)
                 << "," << rec.item.openDebit - rec.item.openCredit << "," << rec.item.inDebit << ","
-                << rec.item.outCredit << "," << CloseBalance(rec) << "," << rec.item.qtyClose << ","
+                << rec.item.outCredit << "," << CloseBalance(rec) << "," << rec.item.qtyIn << ","
+                << rec.item.qtyClose << "," << PurchasePrice(rec.item) << ","
                 << rec.item.unitPrice << ",,,0,0,\"\"\n";
             continue;
         }
         for (const Flag& flag : it->second) {
             out << rec.item.rowNo << "," << CsvEscape(rec.item.nameRaw) << "," << CsvEscape(rec.subaccount)
                 << "," << rec.item.openDebit - rec.item.openCredit << "," << rec.item.inDebit << ","
-                << rec.item.outCredit << "," << CloseBalance(rec) << "," << rec.item.qtyClose << ","
+                << rec.item.outCredit << "," << CloseBalance(rec) << "," << rec.item.qtyIn << ","
+                << rec.item.qtyClose << "," << PurchasePrice(rec.item) << ","
                 << rec.item.unitPrice << "," << CsvEscape(flag.ruleCode) << "," << CsvEscape(flag.category)
                 << "," << flag.severity << "," << flag.amount << "," << CsvEscape(flag.rationale) << "\n";
         }

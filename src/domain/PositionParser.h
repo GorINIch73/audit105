@@ -2,6 +2,7 @@
 
 #include "Spreadsheet.h"
 
+#include <cmath>
 #include <string>
 #include <vector>
 
@@ -41,6 +42,18 @@ struct Item {
     int valueCount = 0;
     int qtyCount = 0;
 };
+
+inline double PurchaseQty(const Item& item) {
+    return item.qtyIn;
+}
+
+inline double PurchasePrice(const Item& item) {
+    if (item.hasQtyRow && std::fabs(item.qtyIn) > 1e-9 && std::fabs(item.inDebit) > 1e-9) {
+        double price = item.inDebit / item.qtyIn;
+        if (price > 0.0) return price;
+    }
+    return item.unitPrice;
+}
 
 struct ParseReport {
     std::vector<Subaccount> subaccounts;

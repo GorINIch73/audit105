@@ -168,9 +168,9 @@ std::vector<KeywordHelp> KeywordHelpFor(const std::string& type) {
     }
     if (type == "term") {
         return {
-            {"термины из справочника",
-             "Правило берёт активные термины из «Термины и списки» по коду правила. Тело шаблона — запасной список, если терминов нет.",
-             "sub:105.31; вакцин", ""},
+             {"термины из справочника",
+              "Правило берёт активные термины из «Термины и списки» по коду правила. Если терминов нет — правило ничего не отмечает.",
+              "sub:105.31;", ""},
         };
     }
     return {
@@ -288,9 +288,8 @@ std::vector<std::vector<FlagResult>> EvaluateRules(const std::vector<Item>& item
         if (rule.type != "term") continue;
         PatternParts parsed = ParseRulePattern(rule.pattern);
         auto it = termsByRule.find(rule.id);
-        const std::vector<std::string>& list = (it != termsByRule.end())
-                                                  ? it->second
-                                                  : SplitPattern(parsed.body);
+        if (it == termsByRule.end()) continue;
+        const std::vector<std::string>& list = it->second;
         if (list.empty()) continue;
         for (size_t i = 0; i < items.size(); ++i) {
             if (!SubaccountAllowed(parsed, items[i])) continue;

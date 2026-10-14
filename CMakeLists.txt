@@ -65,6 +65,8 @@ set(APP_SOURCES
     src/views/RulesEditorView.cpp
     src/views/CategoriesEditorView.cpp
     src/views/TermsEditorView.cpp
+    src/views/ManualTermsImportView.cpp
+    src/views/RulesTransferView.cpp
     src/views/ListsEditorView.cpp
     src/views/RegistryImportView.cpp
     src/views/ReportView.cpp
@@ -174,6 +176,8 @@ add_executable(test_views tests/test_views.cpp
     src/views/RulesEditorView.cpp
     src/views/CategoriesEditorView.cpp
     src/views/TermsEditorView.cpp
+    src/views/ManualTermsImportView.cpp
+    src/views/RulesTransferView.cpp
     src/views/ListsEditorView.cpp
     src/views/RegistryImportView.cpp
     src/views/ReportView.cpp
@@ -213,5 +217,14 @@ if(WIN32)
   target_compile_definitions(audit105 PRIVATE INSTALL_DATA_DIR="data")
 else()
   target_compile_definitions(audit105 PRIVATE
+      INSTALL_DATA_DIR="${CMAKE_INSTALL_FULL_DATADIR}/audit105")
+endif()
+
+add_executable(test_assets tests/test_assets.cpp)
+target_include_directories(test_assets PRIVATE src)
+if(WIN32)
+  target_compile_definitions(test_assets PRIVATE INSTALL_DATA_DIR="data")
+else()
+  target_compile_definitions(test_assets PRIVATE
       INSTALL_DATA_DIR="${CMAKE_INSTALL_FULL_DATADIR}/audit105")
 endif()

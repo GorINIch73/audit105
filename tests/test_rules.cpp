@@ -87,6 +87,19 @@ int main() {
     Check(!hasFlag(8, "SUB01") && !hasFlag(8, "SUB03"), "medical supplies on 105.31 are not flagged as wrong subaccount");
     Check(hasFlag(9, "SUB03"), "reagents and IVD sets on 105.36 flagged as wrong subaccount");
 
+    std::vector<Rule> termOnly = {
+        {20, 2, "T01", "Недопустимо по ОМС", "term", "sub:105.31;шприц", 3, "перечень", "", true},
+    };
+    std::vector<Item> termItems = {MakeItem("Шприц", "105.31", 100, 0, 0, 100, 1)};
+    std::vector<std::vector<FlagResult>> withoutTerms = EvaluateRules(termItems, termOnly, {});
+    Check(withoutTerms[0].empty(), "term rule without terms does not fall back to pattern body");
+    std::vector<Term> termList = {{30, 20, "T01", "Шприц", "шприц", "local", "manual", "Список", "", "", true}};
+    std::vector<std::vector<FlagResult>> withTerms = EvaluateRules(termItems, termOnly, termList);
+    Check(!withTerms[0].empty() && withTerms[0][0].ruleCode == "T01", "term rule flags from its list");
+    std::vector<Term> inactiveTerms = {{30, 20, "T01", "Шприц", "шприц", "local", "manual", "Список", "", "", 0, false}};
+    std::vector<std::vector<FlagResult>> inactive = EvaluateRules(termItems, termOnly, inactiveTerms);
+    Check(inactive[0].empty(), "inactive terms do not flag");
+
     std::vector<Item> big = {MakeItem("Замороженный запас", "105.36", 20000, 0, 0, 20000, 3)};
     std::vector<std::vector<FlagResult>> bigFlags = EvaluateRules(big, rules, terms);
     Check(!bigFlags[0].empty() && bigFlags[0][0].ruleCode == "S05", "threshold lets large frozen stock through");

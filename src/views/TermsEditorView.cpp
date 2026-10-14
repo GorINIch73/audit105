@@ -4,19 +4,38 @@
 #include "../IconsFontAwesome6.h"
 #include "../Widgets.h"
 #include "../domain/RegistryImport.h"
+#include "../domain/CsvReader.h"
+#include "../domain/Spreadsheet.h"
 #include "../domain/Utf8.h"
+#include "../ImGuiFileDialog.h"
+#include <filesystem>
 
 #include <algorithm>
 #include <cctype>
 #include <cstdlib>
 #include <ctime>
 #include <string>
+#include <unordered_map>
 #include <vector>
 
 namespace {
 
 const std::vector<std::string> kScopeValues = {"local", "global"};
 const std::vector<std::string> kOriginValues = {"manual", "import"};
+
+int FindCsvColumn(const std::vector<std::string>& headers, const std::vector<const char*>& aliases) {
+    for (size_t h = 0; h < headers.size(); ++h) {
+        for (const char* alias : aliases) {
+            if (headers[h] == alias) return static_cast<int>(h);
+        }
+    }
+    for (size_t h = 0; h < headers.size(); ++h) {
+        for (const char* alias : aliases) {
+            if (headers[h].find(alias) != std::string::npos) return static_cast<int>(h);
+        }
+    }
+    return -1;
+}
 
 std::vector<std::string> SplitLines(const std::string& text) {
     std::vector<std::string> lines;

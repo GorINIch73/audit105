@@ -17,6 +17,7 @@
 #include <cstdio>
 #include <cstring>
 #include <cmath>
+#include <cstdlib>
 #include <fstream>
 #include <utility>
 #include <string>
@@ -38,7 +39,26 @@ static bool HasView(App& app, const std::string& title) {
     return false;
 }
 
+class OpenerView : public BaseView {
+public:
+    int opens = 0;
+    void Render() override {
+        if (BeginWindow()) {
+            ImGui::Text("opener");
+            EndWindow();
+        }
+        if (opens < 3) {
+            ++opens;
+            app->CreateView<FormView>("Форма МЗ");
+        }
+    }
+};
+
 int main() {
+    // Тесты не должны трогать пользовательский каталог данных ~/.audit105
+    // (история баз, резервные копии, отчёты).
+    setenv("AUDIT105_DATA_DIR", "/tmp/audit105_test", 1);
+
     IMGUI_CHECKVERSION();
     ImGui::CreateContext();
     ImGuiIO& io = ImGui::GetIO();
@@ -227,6 +247,16 @@ int main() {
     printf("ok: copy-to-add duplicates the selected category\n");
 
     // 7а3) «Добавить копированием» дублирует выбранный термин
+    int64_t seedTermRule = 0;
+    for (const Rule& r : app.Db().ListRules()) {
+        if (r.type == "term") { seedTermRule = r.id; break; }
+    }
+    Term seedTerm;
+    seedTerm.ruleId = seedTermRule;
+    seedTerm.term = "Тест-термин для копирования";
+    seedTerm.scope = "local";
+    seedTerm.listName = "Перечень для копирования";
+    app.Db().AddTerm(seedTerm);
     termsEditor->RefreshData();
     size_t termsBeforeCopy = app.Db().ListTerms().size();
     termsEditor->DuplicateDraft();
@@ -549,6 +579,38 @@ int main() {
     formView->SelectRules({});
     printf("ok: the form filters rows by rule\n");
 
+    // 8б) количество и цена в форме считаются по дебетовым оборотам (приход)
+    Item priceItem;
+    priceItem.rowNo = 3;
+    priceItem.nameRaw = "Перчатки стерильные";
+    priceItem.nameNorm = "перчатки стерильные";
+    priceItem.subaccount = "105.31";
+    priceItem.inDebit = 1000.0;
+    priceItem.outCredit = 400.0;
+    priceItem.closeDebit = 600.0;
+    priceItem.hasQtyRow = true;
+    priceItem.qtyIn = 20.0;
+    priceItem.qtyOut = 8.0;
+    priceItem.qtyClose = 12.0;
+    priceItem.unitPrice = 30.0;
+    int64_t priceItemId = app.Db().InsertItem(probeRun, probeSub, priceItem);
+    ItemRecord readBack;
+    for (const ItemRecord& rec : app.Db().ListRunItems(probeRun)) {
+        if (rec.id == priceItemId) readBack = rec;
+    }
+    if (PurchaseQty(readBack.item) != 20.0 || PurchasePrice(readBack.item) != 50.0) {
+        printf("fail: debit turnover gave %.2f qty / %.2f price instead of 20 / 50\n",
+               PurchaseQty(readBack.item), PurchasePrice(readBack.item));
+        return 1;
+    }
+    formView->RefreshData();
+    Frame(app);
+    if (formView->ShownRows() != 3) {
+        printf("fail: form shows %d rows instead of 3\n", formView->ShownRows());
+        return 1;
+    }
+    printf("ok: quantity and price come from debit (purchase) turnover\n");
+
     RunsView* runs = app.CreateView<RunsView>("Реестр прогонов");
     runs->RefreshData();
     for (int i = 0; i < 2; ++i) Frame(app);
@@ -648,6 +710,22 @@ int main() {
         return 1;
     }
     printf("ok: watchdog closes dialogs with no owning view\n");
+
+    // открытие формы изнутри другой формы (кнопка «Форма» в реестре прогонов)
+    app.CloseAllViews();
+    Frame(app);
+    app.CreateView<RunsView>("Реестр прогонов");
+    app.CreateView<OpenerView>("Opener");
+    Frame(app);
+    BaseView* opened = nullptr;
+    for (auto& view : app.views) {
+        if (strstr(view->GetTitle(), "Форма МЗ")) opened = view.get();
+    }
+    if (!opened || ImGui::FindWindowByName(opened->GetTitle()) == nullptr) {
+        printf("fail: view opened from inside another view was never rendered\n");
+        return 1;
+    }
+    printf("ok: a view can be opened from inside another view's render\n");
 
     ImGui::DestroyContext();
     printf("test_views: OK\n");

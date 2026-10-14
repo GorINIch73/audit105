@@ -18,6 +18,8 @@
 #include "views/RulesEditorView.h"
 #include "views/CategoriesEditorView.h"
 #include "views/TermsEditorView.h"
+#include "views/ManualTermsImportView.h"
+#include "views/RulesTransferView.h"
 #include "views/ListsEditorView.h"
 #include "views/RegistryImportView.h"
 #include "views/ReportView.h"
@@ -460,9 +462,13 @@ void App::RenderMenuBar() {
             CreateView<RegistryImportView>("Федеральные справочники");
         }
         ImGui::Separator();
-        ImGui::MenuItem(ICON_FA_FILE_IMPORT " Импорт правил", nullptr, false, false);
-        ImGui::MenuItem(ICON_FA_FILE_EXPORT " Экспорт правил", nullptr, false, false);
-        ImGui::TextDisabled("Импорт/экспорт правил — в разработке");
+        if (ImGui::MenuItem(ICON_FA_FILE_CSV " Импорт ручного перечня ЛС (CSV)")) {
+            CreateView<ManualTermsImportView>("Импорт ручного перечня ЛС");
+        }
+        ImGui::Separator();
+        if (ImGui::MenuItem(ICON_FA_ARROWS_ROTATE " Импорт и экспорт правил")) {
+            CreateView<RulesTransferView>("Импорт и экспорт правил");
+        }
         ImGui::EndMenu();
     }
 
@@ -610,7 +616,8 @@ void App::RenderViews() {
     }
 
     BaseView* currentFocus = nullptr;
-    for (auto& view : views) {
+    for (size_t i = 0; i < views.size(); ++i) {
+        BaseView* view = views[i].get();
         if (!view->IsVisible) continue;
         if (view->WantsDock && mainDockId) {
             ImGui::SetNextWindowDockID(mainDockId, ImGuiCond_Always);
@@ -619,7 +626,7 @@ void App::RenderViews() {
         }
         view->Render();
         if (!view->IsOpen) view->IsVisible = false;
-        if (view->IsVisible && view->IsFocused) currentFocus = view.get();
+        if (view->IsVisible && view->IsFocused) currentFocus = view;
     }
 
     auto keepEnd = std::remove_if(views.begin(), views.end(),

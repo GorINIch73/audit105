@@ -6,6 +6,7 @@
 #include "../domain/Utf8.h"
 
 #include <algorithm>
+#include <cmath>
 #include <cstdio>
 #include <string>
 #include <unordered_map>
@@ -164,9 +165,15 @@ void FormView::RenderDetails(const ItemRecord& rec) {
                            "Арифметика не сходится: расхождение %s",
                            FormatAmount(ArithGap(rec.item)).c_str());
     }
-    ImGui::Text("Количество: откр. %.2f, приход %.2f, расход %.2f, закр. %.2f · цена %.2f",
-                rec.item.qtyOpen, rec.item.qtyIn, rec.item.qtyOut, rec.item.qtyClose,
-                rec.item.unitPrice);
+    ImGui::Text("Количество по приходу (дебет): %.2f · расход %.2f · остаток %.2f",
+                rec.item.qtyIn, rec.item.qtyOut, rec.item.qtyClose);
+    ImGui::Text(ICON_FA_TAG "  Цена закупки (дебет ÷ количество прихода): %s",
+                FormatAmount(PurchasePrice(rec.item)).c_str());
+    if (rec.item.unitPrice > 0.0 &&
+        std::fabs(rec.item.unitPrice - PurchasePrice(rec.item)) > 0.005) {
+        ImGui::TextDisabled("Средняя цена по всем оборотам: %s",
+                            FormatAmount(rec.item.unitPrice).c_str());
+    }
 
     ImGui::Separator();
     ImGui::Text(ICON_FA_GAVEL "  Сработавшие правила");
@@ -309,13 +316,17 @@ void FormView::Render() {
             if (c) ++selectedRulesCount;
         }
 
-        std::string filterHeader = std::string(ICON_FA_FILTER) + "  Фильтр: оборот и правила";
+        std::string filterLabel = std::string(ICON_FA_FILTER) + "  Фильтр: оборот и правила";
         if (!ruleCodes.empty()) {
-            filterHeader += " (" + std::to_string(selectedRulesCount) + "/" +
-                            std::to_string(ruleCodes.size()) + ")";
+            filterLabel += " (" + std::to_string(selectedRulesCount) + "/" +
+                           std::to_string(ruleCodes.size()) + ")";
         }
         ImGui::PushID("form_filter_shutter");
-        if (ImGui::CollapsingHeader(filterHeader.c_str())) {
+        bool filterOpen = ImGui::TreeNodeEx("shutter",
+                                           ImGuiTreeNodeFlags_DefaultOpen |
+                                           ImGuiTreeNodeFlags_CollapsingHeader,
+                                           "%s", filterLabel.c_str());
+        if (filterOpen) {
             ImGui::Combo(ICON_FA_FILTER "  Фильтр", &turnoverMode, TurnoverModes, 6);
 
             if (!ruleCodes.empty()) {
@@ -389,6 +400,7 @@ void FormView::Render() {
         if (height < 320.0f) height = 320.0f;
         const float minLeft = 300.0f;
         const float maxLeft = std::max(minLeft, available - 260.0f);
+        if (listWidth <= 0.0f) listWidth = available * 2.0f / 3.0f;
         listWidth = std::clamp(listWidth, minLeft, maxLeft);
 
         shown = 0;
@@ -407,8 +419,8 @@ void FormView::Render() {
             ImGui::TableSetupColumn("Приход", ImGuiTableColumnFlags_WidthFixed, 90.0f);
             ImGui::TableSetupColumn("Расход", ImGuiTableColumnFlags_WidthFixed, 90.0f);
             ImGui::TableSetupColumn("Закр.", ImGuiTableColumnFlags_WidthFixed, 90.0f);
-            ImGui::TableSetupColumn("Кол.", ImGuiTableColumnFlags_WidthFixed, 70.0f);
-            ImGui::TableSetupColumn("Цена", ImGuiTableColumnFlags_WidthFixed, 70.0f);
+            ImGui::TableSetupColumn("Кол. прих.", ImGuiTableColumnFlags_WidthFixed, 80.0f);
+            ImGui::TableSetupColumn("Цена прих.", ImGuiTableColumnFlags_WidthFixed, 90.0f);
             ImGui::TableSetupColumn("Отметка", ImGuiTableColumnFlags_WidthFixed, 90.0f);
             ImGui::TableHeadersRow();
 
@@ -457,9 +469,12 @@ void FormView::Render() {
                 ImGui::TableNextColumn();
                 ImGui::Text("%s", FormatAmount(item.closeDebit - item.closeCredit).c_str());
                 ImGui::TableNextColumn();
-                ImGui::Text("%.2f/%.2f", item.qtyOpen, item.qtyClose);
+                if (item.hasQtyRow) ImGui::Text("%.2f", PurchaseQty(item));
+                else ImGui::TextDisabled("нет");
                 ImGui::TableNextColumn();
-                ImGui::Text("%s", FormatAmount(item.unitPrice).c_str());
+                double purchasePrice = PurchasePrice(item);
+                if (purchasePrice > 0.0) ImGui::Text("%s", FormatAmount(purchasePrice).c_str());
+                else ImGui::TextDisabled("—");
                 ImGui::TableNextColumn();
                 if (!item.arithOk) ImGui::TextColored(ImVec4(1.0f, 0.35f, 0.35f, 1.0f), "арифм.");
                 else {
@@ -508,6 +523,7 @@ void FormView::Render() {
         }
         ImGui::TextDisabled(
             "Легенда: фон строки = цвет категории; красный — арифметика не сходится. "
+            "«Кол. прих.» и «Цена прих.» — по дебетовым оборотам (приход). "
             "Правил в выборке: %d/%zu", selectedRulesCount, ruleCodes.size());
 
         std::string runModalId = "delete_run_" + std::to_string(runs[runIndex].id);

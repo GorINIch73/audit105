@@ -29,7 +29,7 @@ int main() {
     }
 
     Check(db.ListCategories().size() == 5, "seeded categories");
-    Check(db.ListRules().size() == 18, "example rules seeded on new database");
+    Check(db.ListRules().size() == 19, "example rules seeded on new database");
     bool noTurnoverIsGray = false;
     for (const Rule& rule : db.ListRules()) {
         if (rule.code != "S05") continue;
@@ -38,10 +38,10 @@ int main() {
         }
     }
     Check(noTurnoverIsGray, "no-turnover rule uses the gray category");
-    Check(db.CountRulesByCodePrefix("OMS") == 5, "OMS term rules seeded");
+    Check(db.CountRulesByCodePrefix("OMS") == 6, "OMS term rules seeded");
     Check(db.CountRulesByCodePrefix("SUB") == 2, "wrong-subaccount rules seeded");
     Check(db.CountRulesByCodePrefix("OS") == 3, "fixed-asset candidate rules seeded");
-    Check(db.ListTerms().size() == 25, "example term lists seeded");
+    Check(db.ListTerms().size() == 1, "one example term shipped with default rules");
 
     int seededTermLists = 0;
     bool termListHasMeta = false;
@@ -73,7 +73,7 @@ int main() {
     for (const Term& term : db.ListTerms()) {
         if (term.ruleCode == "OMS01") hasOmsTerms = true;
     }
-    Check(hasOmsTerms, "OMS01 rule has its term list");
+    Check(hasOmsTerms, "default rules keep one example OMS term");
 
     auto categoryIdByName = [&](const std::string& name) -> int64_t {
         for (const Category& cat : db.ListCategories()) {
@@ -154,7 +154,7 @@ int main() {
     rule.severity = 2;
     rule.rationale = "тестовое правило";
     Check(db.AddRule(rule), "add rule");
-    Check(db.ListRules().size() == 19, "rule listed");
+    Check(db.ListRules().size() == 20, "rule listed");
     int64_t ruleId = 0;
     for (const Rule& stored : db.ListRules()) {
         if (stored.code == "TEST_RULE") ruleId = stored.id;
@@ -163,9 +163,9 @@ int main() {
     rule.severity = 3;
     rule.id = ruleId;
     Check(db.UpdateRule(rule), "update rule");
-    Check(db.ListRules().size() == 19, "rule count unchanged after update");
+    Check(db.ListRules().size() == 20, "rule count unchanged after update");
     Check(db.DeleteRule(ruleId), "delete rule");
-    Check(db.ListRules().size() == 18, "rule removed");
+    Check(db.ListRules().size() == 19, "rule removed");
 
     size_t termBase = db.ListTerms().size();
     Term term;
@@ -278,6 +278,13 @@ int main() {
     Check(hasList, "term lists grouped by rule and list name");
     Check(db.CountRuleTerms(omsRuleId) > 0, "rule term count");
     Check(db.DeleteTerm(blankTermId), "blank term removed");
+
+    Term seedOMS01;
+    seedOMS01.ruleId = omsRuleId;
+    seedOMS01.term = "Иммуноглобулин";
+    seedOMS01.scope = "local";
+    seedOMS01.listName = "Перечень ОМС";
+    db.AddTerm(seedOMS01);
 
     int64_t sourceTermId = 0;
     for (const Term& stored : db.ListTerms()) {
@@ -501,7 +508,7 @@ int main() {
     int64_t reagentId = db.InsertItem(runEx, sub36, reagent);
 
     int flagged = db.ApplyRules(runEx);
-    Check(flagged == 4, "example rules flag four positions");
+    Check(flagged == 4, "example rules still flag structural positions");
     std::vector<Flag> omsFlags = db.ListItemFlags(omsItemId);
     std::vector<Flag> nonMedFlags = db.ListItemFlags(nonMedId);
     std::vector<Flag> assetFlags = db.ListItemFlags(fixedAssetId);
@@ -512,7 +519,6 @@ int main() {
         }
         return false;
     };
-    Check(has(omsFlags, "OMS01"), "term rule flags immunoglobulin as not OMS");
     Check(has(nonMedFlags, "SUB01"), "synonym rule flags auto parts on 105.31");
     Check(has(reagentFlags, "SUB03"), "reagents and IVD sets on 105.36 flagged as wrong subaccount");
     Check(has(assetFlags, "OS01") && has(assetFlags, "OS02") && has(assetFlags, "OS03"),
@@ -531,16 +537,16 @@ int main() {
     Check(db2.ImportDictionaryPackage(pkg, stats), "dictionary package imported");
     Check(stats.categoriesUpdated == 5 && stats.categoriesAdded == 0,
          "seeded categories updated, not duplicated");
-    Check(stats.rulesAdded == 1 && stats.rulesUpdated == 18,
+    Check(stats.rulesAdded == 1 && stats.rulesUpdated == 19,
          "new rule added, existing rules updated");
-    Check(db2.ListCategories().size() == 5 && db2.ListRules().size() == 19,
+    Check(db2.ListCategories().size() == 5 && db2.ListRules().size() == 20,
          "dictionaries present in second db");
 
     DictImportStats stats2;
     Check(db.ImportDictionaryPackage(pkg, stats2), "re-import into original db");
     Check(stats2.categoriesAdded == 0 && stats2.categoriesUpdated == 5,
          "categories updated, not duplicated");
-    Check(stats2.rulesAdded == 0 && stats2.rulesUpdated == 19,
+    Check(stats2.rulesAdded == 0 && stats2.rulesUpdated == 20,
          "rules updated, not duplicated");
 
     int64_t s01InDb2 = 0;
@@ -649,7 +655,7 @@ int main() {
     Check(rulesGone == 1, "bulk delete removed the selected rule");
     Check(termsGone == 2, "bulk delete removed the rule terms");
     Check(flagsGone == 1, "bulk delete removed the rule flags");
-    Check(db.ListRules().size() == 19, "rule list back to seeded size after bulk delete");
+    Check(db.ListRules().size() == 20, "rule list back to seeded size after bulk delete");
     int tmpItems = 0;
     double tmpSum = 0.0;
     Check(db.DeleteRun(tmpRunId, tmpItems, tmpSum), "temporary run removed");

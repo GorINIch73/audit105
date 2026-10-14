@@ -29,7 +29,7 @@ private:
     std::vector<Category> categories;
     std::unordered_map<std::string, ImVec4> categoryColor;
     int64_t selectedId = 0;
-    float listWidth = 700.0f;
+    float listWidth = 0.0f;
 
     void RenderDetails(const ItemRecord& rec);
     void ReapplyRules();

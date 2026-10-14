@@ -23,9 +23,10 @@ inline std::string ExecDir() {
 
 inline std::string AssetPath(const std::string& file) {
     const std::vector<std::string> candidates = {
-        "data/" + file,
-        ExecDir() + "/data/" + file,
-        std::string(INSTALL_DATA_DIR) + "/" + file,
+        "data/" + file,                              // запуск из каталога проекта/сборки
+        ExecDir() + "/data/" + file,                 // data рядом с исполняемым файлом
+        ExecDir() + "/" + file,                      // файл прямо рядом с исполняемым файлом
+        std::string(INSTALL_DATA_DIR) + "/" + file,  // стандартный каталог установки (Linux)
     };
     for (const auto& path : candidates) {
         std::error_code ec;
@@ -40,6 +41,10 @@ inline std::string HomeDir() {
 }
 
 inline std::string AppDataDir() {
+    // Позволяет тестам и другим инструментам использовать отдельный каталог,
+    // не трогая пользовательские данные (~/.audit105).
+    const char* override = getenv("AUDIT105_DATA_DIR");
+    if (override && *override) return override;
     return HomeDir() + "/.audit105";
 }
 

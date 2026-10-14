@@ -359,6 +359,14 @@ int main() {
     source.listName = "АРТ при ВИЧ/СПИД (АТХ J05AF, J05AG, J05AR, J05AJ)";
     source.format = "XLSX";
     source.asOfDate = "2026-10-14";
+    Term seededManualTermObj;
+    seededManualTermObj.ruleId = oms02;
+    seededManualTermObj.term = "Зидовудин";
+    seededManualTermObj.scope = "global";
+    seededManualTermObj.origin = "manual";
+    seededManualTermObj.listName = source.listName;
+    db.AddTerm(seededManualTermObj);
+
     int64_t sourceId = db.RegisterRegistrySource(source);
     Check(sourceId != 0, "registry source registered");
 

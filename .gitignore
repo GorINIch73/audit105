@@ -19,6 +19,7 @@ refs/
 *.xlsm
 *.xml
 *.csv
+!data/manual_oms_terms.csv
 *.zip
 *.pdf
 *.docx
