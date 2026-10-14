@@ -251,7 +251,8 @@ sub:105.31; ^вакцина
 
 ## Пакет справочников
 
-В **Настройки** есть экспорт и импорт пакета справочников в JSON.
+В меню **Импорт → Импорт и экспорт правил** есть экспорт и импорт пакета справочников в JSON
+(форма «Импорт и экспорт правил»).
 
 Пакет содержит:
 
@@ -393,10 +394,41 @@ cmake --build build -j4
 ./build/test_rules
 ./build/test_registry
 ./build/test_views
+./build/test_assets
 ```
 
-Запуск приложения:
+Запуск приложения (отладка, из каталога проекта):
 
 ```bash
 ./build/audit105
 ```
+
+## Установка в систему (Linux)
+
+```bash
+cmake -S . -B build
+cmake --build build -j4
+sudo cmake --install build
+```
+
+По умолчанию используется префикс `/usr/local` (задан в `CMakeLists.txt`):
+
+- исполняемый файл — `/usr/local/bin/audit105`;
+- шрифты и ресурсы (`Roboto-Regular.ttf`, `fa-solid-900.otf`, `audit105.svg`,
+  `manual_oms_terms.csv`) — `/usr/local/share/audit105`;
+- значок — `/usr/local/share/icons/hicolor/scalable/apps/audit105.svg`;
+- файл `.desktop` — `/usr/local/share/applications/audit105.desktop`.
+
+Можно установить в другой префикс, например `cmake -S . -B build -DCMAKE_INSTALL_PREFIX=~/.local`.
+Путь к каталогу ресурсов «запекается» в binary при конфигурации, поэтому программа
+находит шрифты при запуске из любого каталога.
+
+Порядок поиска шрифтов и ресурсов (`AssetPath`):
+
+1. `data/` в текущем каталоге (запуск из каталога проекта или сборки);
+2. `data/` рядом с исполняемым файлом;
+3. файл прямо рядом с исполняемым файлом;
+4. стандартный каталог установки (`/usr/local/share/audit105`).
+
+Системные зависимости: GLFW 3.3, OpenGL, SQLite3, zlib
+(Debian/Ubuntu: `sudo apt install libglfw3-dev libsqlite3-dev zlib1g-dev`).
